@@ -999,6 +999,10 @@ MIT License - see LICENSE file for details
 
 ## Changelog
 
+### Version 0.13.1
+
+- Fix: `create agent-team` now correctly matches the template's actual sentinels (`agent-team-design` script key, `agent_team_design` module name in non-Python files, `packages` path in pyproject.toml). Previously the script key wasn't renamed and supporting `.md` files kept stale module references
+
 ### Version 0.13.0
 
 - Feature: New `fips-agents create agent-team` subcommand scaffolds agent team design workspaces from the [agent-team-template](https://github.com/fips-agents/agent-team-template) repository (#52). Follows the standalone-repo pattern: clones the template, renames `src/agent_team_design/` to the new module name, updates pyproject.toml entry points, and replaces sentinel strings in supporting files. Success message directs users to the `/design-team` skill in Claude Code for iterative team design
