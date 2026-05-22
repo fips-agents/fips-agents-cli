@@ -427,6 +427,115 @@ def customize_sandbox_project(
         raise
 
 
+def customize_agent_team_project(
+    project_path: Path,
+    new_name: str,
+    github_repo: str | None = None,
+) -> None:
+    """
+    Customize an agent-team project with the new project name.
+
+    Replaces 'agent-team-template' with the new project name across configuration
+    files and build scripts. Also renames the source package directory from
+    agent_team_design to the new module name, and updates entry point scripts
+    in pyproject.toml.
+
+    Args:
+        project_path: Path to the project root directory
+        new_name: The new project name (with hyphens allowed)
+        github_repo: GitHub repo in "owner/name" format for Containerfile label
+
+    Raises:
+        FileNotFoundError: If pyproject.toml doesn't exist
+    """
+    try:
+        console.print(f"[cyan]Customizing agent-team project for '{new_name}'...[/cyan]")
+
+        # 1. Update pyproject.toml name field (use tomlkit to preserve formatting)
+        pyproject_path = project_path / "pyproject.toml"
+        if not pyproject_path.exists():
+            raise FileNotFoundError(f"pyproject.toml not found at {pyproject_path}")
+
+        with open(pyproject_path) as f:
+            pyproject = tomlkit.parse(f.read())
+
+        if "project" in pyproject:
+            pyproject["project"]["name"] = new_name
+
+        # 2. Update entry point scripts in pyproject.toml
+        old_module_name = "agent_team_design"
+        new_module_name = to_module_name(new_name)
+
+        if "project" in pyproject and "scripts" in pyproject["project"]:
+            scripts = pyproject["project"]["scripts"]
+            old_scripts = dict(scripts)
+
+            for script_name, script_path in old_scripts.items():
+                # Replace old module name with new module name in the path
+                new_script_path = script_path.replace(old_module_name, new_module_name)
+
+                # Update the script name to match the new project name
+                if script_name in (old_module_name, "agent-team-template"):
+                    del scripts[script_name]
+                    scripts[new_name] = new_script_path
+                else:
+                    # Keep the same script name but update the path if needed
+                    scripts[script_name] = new_script_path
+
+        with open(pyproject_path, "w") as f:
+            f.write(tomlkit.dumps(pyproject))
+
+        console.print("[green]✓[/green] Updated pyproject.toml")
+
+        # 3. Rename source directory agent_team_design → new module name
+        src_dir = project_path / "src"
+        old_src_path = src_dir / old_module_name
+        new_src_path = src_dir / new_module_name
+
+        if old_src_path.exists() and old_src_path != new_src_path:
+            shutil.move(str(old_src_path), str(new_src_path))
+            console.print(f"[green]✓[/green] Renamed source directory to '{new_module_name}'")
+        elif not old_src_path.exists():
+            console.print("[dim]Note: agent_team_design directory not found, skipping rename[/dim]")
+
+        # 4. Find-and-replace agent_team_design in .py files outside the renamed package
+        for py_file in project_path.rglob("*.py"):
+            # Skip files inside the renamed package directory
+            if new_src_path in py_file.parents:
+                continue
+            _replace_in_file(py_file, old_module_name, new_module_name)
+
+        console.print("[green]✓[/green] Updated Python module references")
+
+        # 5. String-replace "agent-team-template" in supporting files
+        files_to_update = [
+            project_path / "README.md",
+            project_path / "CLAUDE.md",
+            project_path / "Makefile",
+            project_path / "Containerfile",
+            project_path / "deploy.sh",
+            project_path / "redeploy.sh",
+        ]
+
+        for file_path in files_to_update:
+            _replace_in_file(file_path, "agent-team-template", new_name)
+
+        console.print("[green]✓[/green] Updated configuration files")
+
+        # 6. Replace OWNER/REPO placeholder in Containerfile image source label
+        repo_value = github_repo if github_repo else f"OWNER/{new_name}"
+        _replace_in_file(project_path / "Containerfile", "OWNER/REPO", repo_value)
+
+        console.print("[green]✓[/green] Agent-team project customization complete")
+
+    except FileNotFoundError as e:
+        console.print(f"[red]✗[/red] {e}")
+        raise
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed to customize agent-team project: {e}")
+        raise
+
+
 def customize_go_project(project_path: Path, new_name: str, sentinel: str) -> None:
     """
     Customize a Go-based template project with the new project name.

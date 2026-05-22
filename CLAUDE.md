@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **fips-agents-cli** is a Python-based CLI tool for scaffolding FIPS-compliant AI agent projects. It scaffolds MCP (Model Context Protocol) servers and AI agent projects from production-ready templates, customizes them for new projects, and prepares them for immediate development use.
 
-**Current Status:** Scaffolding commands implemented: `create mcp-server`, `create agent`, `create gateway`, `create ui`, `create sandbox`, `create model-car`. Post-scaffolding commands: `generate` (tool, resource, prompt, middleware), `patch` (check, all + type-specific category subcommands — see below), `add` (code-executor, files, vision), `vendor`. Note: `create workflow` exists in code but is not yet working.
+**Current Status:** Scaffolding commands implemented: `create mcp-server`, `create agent`, `create agent-team`, `create gateway`, `create ui`, `create sandbox`, `create model-car`. Post-scaffolding commands: `generate` (tool, resource, prompt, middleware), `patch` (check, all + type-specific category subcommands — see below), `add` (code-executor, files, vision), `vendor`. Note: `create workflow` exists in code but is not yet working.
 
 The `patch` command is type-aware via `template.type` in `.template-info`:
 - **MCP server** projects expose `patch generators | core | docs | build | claude`.

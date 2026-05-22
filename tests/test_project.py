@@ -5,6 +5,7 @@ import tomlkit
 
 from fips_agents_cli.tools.project import (
     customize_agent_project,
+    customize_agent_team_project,
     customize_go_project,
     to_module_name,
     validate_project_name,
@@ -403,3 +404,142 @@ class TestCustomizeGoProject:
         content = (project / "go.mod").read_text()
         assert "my-gateway" in content
         assert "gateway-template" not in content
+
+
+class TestCustomizeAgentTeamProject:
+    """Tests for agent-team project customization."""
+
+    def _create_agent_team_template(self, path):
+        """Create a minimal agent-team template structure for testing."""
+        path.mkdir(parents=True, exist_ok=True)
+
+        # pyproject.toml with scripts entry
+        (path / "pyproject.toml").write_text(
+            "[project]\n"
+            'name = "agent-team-template"\n'
+            'version = "0.1.0"\n\n'
+            "[project.scripts]\n"
+            'agent-team-template = "agent_team_design.cli:main"\n'
+        )
+
+        # Source package
+        src = path / "src" / "agent_team_design"
+        src.mkdir(parents=True)
+        (src / "__init__.py").write_text('"""Agent team design package."""\n')
+        (src / "cli.py").write_text("from .core import run\n")
+
+        # External test file referencing agent_team_design
+        tests = path / "tests"
+        tests.mkdir()
+        (tests / "test_cli.py").write_text(
+            "from agent_team_design.cli import main\n\n" "def test_main():\n" "    pass\n"
+        )
+
+        # Supporting files
+        (path / "README.md").write_text("# agent-team-template\n")
+        (path / "CLAUDE.md").write_text("# agent-team-template dev guide\n")
+        (path / "Makefile").write_text("PROJECT = agent-team-template\n")
+        (path / "Containerfile").write_text(
+            "FROM python:3.12\n"
+            'LABEL io.opencontainers.image.source="https://github.com/OWNER/REPO"\n'
+        )
+
+    def test_updates_pyproject_name(self, temp_dir):
+        """Test that pyproject.toml name field is updated."""
+        project = temp_dir / "my-team"
+        self._create_agent_team_template(project)
+
+        customize_agent_team_project(project, "my-team")
+
+        pyproject = tomlkit.parse((project / "pyproject.toml").read_text())
+        assert pyproject["project"]["name"] == "my-team"
+
+    def test_renames_src_directory(self, temp_dir):
+        """Test that src/agent_team_design/ is renamed to src/<module_name>/."""
+        project = temp_dir / "my-team"
+        self._create_agent_team_template(project)
+
+        customize_agent_team_project(project, "my-team")
+
+        old_path = project / "src" / "agent_team_design"
+        new_path = project / "src" / "my_team"
+
+        assert not old_path.exists()
+        assert new_path.exists()
+        assert (new_path / "__init__.py").exists()
+
+    def test_updates_entry_point_scripts(self, temp_dir):
+        """Test that entry point scripts are updated in pyproject.toml."""
+        project = temp_dir / "my-team"
+        self._create_agent_team_template(project)
+
+        customize_agent_team_project(project, "my-team")
+
+        pyproject = tomlkit.parse((project / "pyproject.toml").read_text())
+        scripts = pyproject["project"]["scripts"]
+
+        # Script key should be renamed from "agent-team-template" to "my-team"
+        assert "my-team" in scripts
+        assert "agent-team-template" not in scripts
+        # Path should use new module name
+        assert scripts["my-team"] == "my_team.cli:main"
+
+    def test_updates_test_file_imports(self, temp_dir):
+        """Test that test file imports are updated to use new module name."""
+        project = temp_dir / "my-team"
+        self._create_agent_team_template(project)
+
+        customize_agent_team_project(project, "my-team")
+
+        content = (project / "tests" / "test_cli.py").read_text()
+        assert "from my_team.cli import main" in content
+        assert "agent_team_design" not in content
+
+    def test_updates_supporting_files(self, temp_dir):
+        """Test that supporting files are updated with new project name."""
+        project = temp_dir / "my-team"
+        self._create_agent_team_template(project)
+
+        customize_agent_team_project(project, "my-team")
+
+        readme = (project / "README.md").read_text()
+        assert "# my-team" in readme
+        assert "agent-team-template" not in readme
+
+        claude_md = (project / "CLAUDE.md").read_text()
+        assert "# my-team" in claude_md
+        assert "agent-team-template" not in claude_md
+
+        makefile = (project / "Makefile").read_text()
+        assert "PROJECT = my-team" in makefile
+        assert "agent-team-template" not in makefile
+
+    def test_updates_containerfile_label(self, temp_dir):
+        """Test that Containerfile OWNER/REPO is replaced with github_repo."""
+        project = temp_dir / "my-team"
+        self._create_agent_team_template(project)
+
+        customize_agent_team_project(project, "my-team", github_repo="myorg/my-team")
+
+        content = (project / "Containerfile").read_text()
+        assert "OWNER/REPO" not in content
+        assert "myorg/my-team" in content
+
+    def test_preserves_internal_package_files(self, temp_dir):
+        """Test that files inside the renamed package preserve relative imports."""
+        project = temp_dir / "my-team"
+        self._create_agent_team_template(project)
+
+        customize_agent_team_project(project, "my-team")
+
+        # cli.py should still have its relative import unchanged
+        cli_content = (project / "src" / "my_team" / "cli.py").read_text()
+        assert "from .core import run" in cli_content
+
+    def test_missing_pyproject_raises_error(self, temp_dir):
+        """Test that missing pyproject.toml raises FileNotFoundError."""
+        project = temp_dir / "my-team"
+        project.mkdir()
+
+        with pytest.raises(FileNotFoundError):
+            customize_agent_team_project(project, "my-team")
