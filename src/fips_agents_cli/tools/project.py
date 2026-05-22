@@ -475,7 +475,7 @@ def customize_agent_team_project(
                 new_script_path = script_path.replace(old_module_name, new_module_name)
 
                 # Update the script name to match the new project name
-                if script_name in (old_module_name, "agent-team-template"):
+                if script_name in (old_module_name, "agent-team-template", "agent-team-design"):
                     del scripts[script_name]
                     scripts[new_name] = new_script_path
                 else:
@@ -484,6 +484,10 @@ def customize_agent_team_project(
 
         with open(pyproject_path, "w") as f:
             f.write(tomlkit.dumps(pyproject))
+
+        # Replace any remaining references to the old module name in pyproject.toml
+        # (e.g., packages = ["src/agent_team_design"] in [tool.hatch.build])
+        _replace_in_file(pyproject_path, old_module_name, new_module_name)
 
         console.print("[green]✓[/green] Updated pyproject.toml")
 
@@ -507,7 +511,7 @@ def customize_agent_team_project(
 
         console.print("[green]✓[/green] Updated Python module references")
 
-        # 5. String-replace "agent-team-template" in supporting files
+        # 5. String-replace project name sentinels in supporting files
         files_to_update = [
             project_path / "README.md",
             project_path / "CLAUDE.md",
@@ -518,7 +522,9 @@ def customize_agent_team_project(
         ]
 
         for file_path in files_to_update:
+            _replace_in_file(file_path, "agent-team-design", new_name)
             _replace_in_file(file_path, "agent-team-template", new_name)
+            _replace_in_file(file_path, old_module_name, new_module_name)
 
         console.print("[green]✓[/green] Updated configuration files")
 

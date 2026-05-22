@@ -416,10 +416,10 @@ class TestCustomizeAgentTeamProject:
         # pyproject.toml with scripts entry
         (path / "pyproject.toml").write_text(
             "[project]\n"
-            'name = "agent-team-template"\n'
+            'name = "agent-team-design"\n'
             'version = "0.1.0"\n\n'
             "[project.scripts]\n"
-            'agent-team-template = "agent_team_design.cli:main"\n'
+            'agent-team-design = "agent_team_design.cli:main"\n'
         )
 
         # Source package
@@ -436,9 +436,9 @@ class TestCustomizeAgentTeamProject:
         )
 
         # Supporting files
-        (path / "README.md").write_text("# agent-team-template\n")
-        (path / "CLAUDE.md").write_text("# agent-team-template dev guide\n")
-        (path / "Makefile").write_text("PROJECT = agent-team-template\n")
+        (path / "README.md").write_text("# agent-team-design\n")
+        (path / "CLAUDE.md").write_text("# agent-team-design dev guide\n")
+        (path / "Makefile").write_text("PROJECT = agent-team-design\n")
         (path / "Containerfile").write_text(
             "FROM python:3.12\n"
             'LABEL io.opencontainers.image.source="https://github.com/OWNER/REPO"\n'
@@ -478,9 +478,9 @@ class TestCustomizeAgentTeamProject:
         pyproject = tomlkit.parse((project / "pyproject.toml").read_text())
         scripts = pyproject["project"]["scripts"]
 
-        # Script key should be renamed from "agent-team-template" to "my-team"
+        # Script key should be renamed from "agent-team-design" to "my-team"
         assert "my-team" in scripts
-        assert "agent-team-template" not in scripts
+        assert "agent-team-design" not in scripts
         # Path should use new module name
         assert scripts["my-team"] == "my_team.cli:main"
 
@@ -504,15 +504,15 @@ class TestCustomizeAgentTeamProject:
 
         readme = (project / "README.md").read_text()
         assert "# my-team" in readme
-        assert "agent-team-template" not in readme
+        assert "agent-team-design" not in readme
 
         claude_md = (project / "CLAUDE.md").read_text()
         assert "# my-team" in claude_md
-        assert "agent-team-template" not in claude_md
+        assert "agent-team-design" not in claude_md
 
         makefile = (project / "Makefile").read_text()
         assert "PROJECT = my-team" in makefile
-        assert "agent-team-template" not in makefile
+        assert "agent-team-design" not in makefile
 
     def test_updates_containerfile_label(self, temp_dir):
         """Test that Containerfile OWNER/REPO is replaced with github_repo."""
