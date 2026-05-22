@@ -5,7 +5,7 @@ A command-line tool for creating and managing FIPS-compliant AI agent projects. 
 ## Features
 
 - 🚀 Quick project scaffolding from templates
-- 📦 MCP server, AI agent, Go gateway, chat UI, sandbox, and ModelCar project generation
+- 📦 MCP server, AI agent, agent team, Go gateway, chat UI, sandbox, and ModelCar project generation
 - 🔧 Automatic project customization (pyproject.toml, module names, entry points)
 - ⚡ Component generation (tools, resources, prompts, middleware) with Jinja2 templates
 - 🎨 Beautiful CLI output with Rich
@@ -66,6 +66,9 @@ fips-agents create mcp-server my-mcp-server
 
 # AI agent
 fips-agents create agent my-research-agent
+
+# Agent team design workspace
+fips-agents create agent-team my-team
 
 # Go HTTP gateway (proxies to an agent backend)
 fips-agents create gateway my-gateway
@@ -204,6 +207,33 @@ fips-agents create agent my-agent --yes --local
 
 # Create with vendored fipsagents source
 fips-agents create agent my-agent --vendored --local
+```
+
+#### `create agent-team`
+
+```bash
+fips-agents create agent-team <project-name> [OPTIONS]
+```
+
+Creates an agent team design workspace from the [agent-team-template](https://github.com/fips-agents/agent-team-template) repository. The template includes `/design-team` skill for iterative team design dialog, BPMN 2.0 parser, output generators for agent.yaml stubs and team manifests, and trust/scrutiny profiling.
+
+**Arguments:**
+
+- `project-name` — Name for your agent team project
+
+**Options:** Same shared options as above.
+
+**Examples:**
+
+```bash
+# Create agent team project
+fips-agents create agent-team my-team
+
+# Create with GitHub repo
+fips-agents create agent-team my-team --github --private
+
+# Non-interactive mode
+fips-agents create agent-team my-team --yes --local
 ```
 
 #### `create gateway`
@@ -968,6 +998,10 @@ MIT License - see LICENSE file for details
 - **MCP Protocol**: https://modelcontextprotocol.io/
 
 ## Changelog
+
+### Version 0.13.0
+
+- Feature: New `fips-agents create agent-team` subcommand scaffolds agent team design workspaces from the [agent-team-template](https://github.com/fips-agents/agent-team-template) repository (#52). Follows the standalone-repo pattern: clones the template, renames `src/agent_team_design/` to the new module name, updates pyproject.toml entry points, and replaces sentinel strings in supporting files. Success message directs users to the `/design-team` skill in Claude Code for iterative team design
 
 ### Version 0.12.1
 
