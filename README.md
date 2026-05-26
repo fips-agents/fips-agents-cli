@@ -999,6 +999,12 @@ MIT License - see LICENSE file for details
 
 ## Changelog
 
+### Version 0.14.0
+
+- Feature: `patch all` now discovers categories from `.fips-template.yaml` for manifest-only project types (e.g. agent-team). Previously it fast-failed with a "not supported" error for any type without hardcoded categories. Individual category commands (`patch docs`, `patch build`, etc.) and `patch check` already handled this correctly; only `patch all` needed the fallback. New `discover_manifest_categories()` function in `tools/patching.py` handles the discovery with graceful error handling for network failures
+- Closed: #13, #14, #15, #16, #52 — all previously implemented. #52 (`create agent-team`) shipped in v0.13.0; #13–#16 (patch type-awareness) shipped in v0.12.0–v0.12.1
+- Related: Filed [agent-team-template#10](https://github.com/fips-agents/agent-team-template/issues/10) to add the `.fips-template.yaml` manifest to the template repo, which completes end-to-end `patch` support for agent-team projects
+
 ### Version 0.13.1
 
 - Fix: `create agent-team` now correctly matches the template's actual sentinels (`agent-team-design` script key, `agent_team_design` module name in non-Python files, `packages` path in pyproject.toml). Previously the script key wasn't renamed and supporting `.md` files kept stale module references

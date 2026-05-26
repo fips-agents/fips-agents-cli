@@ -12,6 +12,7 @@ from fips_agents_cli.tools.patching import (
     AGENT_NEVER_PATCH,
     MCP_FILE_CATEGORIES,
     MCP_NEVER_PATCH,
+    discover_manifest_categories,
     get_categories_for_type,
     get_project_type,
 )
@@ -855,12 +856,12 @@ class TestPatchUnsupportedTypeE2E:
     def test_patch_all_exits_cleanly_with_helpful_message(
         self, sandbox_project, monkeypatch, cli_runner
     ):
-        # `patch all` fails at pre-clone (get_available_categories) for
-        # unsupported types — should not bubble ValueError.
-        called = {"clone": False}
-
+        # `patch all` now falls back to discover_manifest_categories for
+        # unsupported types — it clones to look for a manifest, but when
+        # no manifest is found it exits cleanly (no ValueError traceback).
         def fake_clone(url, target_path, branch=None):
-            called["clone"] = True
+            target_path.mkdir(parents=True, exist_ok=True)
+            # No .fips-template.yaml — bare template
             return "x"
 
         monkeypatch.setattr(patching, "clone_template", fake_clone)
@@ -870,8 +871,7 @@ class TestPatchUnsupportedTypeE2E:
         assert result.exit_code == 1, result.output
         assert "Traceback" not in result.output
         assert "sandbox" in result.output
-        # Pre-clone fast-fail — should not have cloned anything
-        assert called["clone"] is False
+        assert ".fips-template.yaml" in result.output
 
     def test_manifest_makes_sandbox_patchable(self, sandbox_project, monkeypatch, cli_runner):
         # Once the sandbox template ships a manifest, `patch check` works
@@ -897,3 +897,235 @@ patch:
         assert result.exit_code == 0, result.output
         # Drift in build surfaces because the project's Makefile differs
         assert "build" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — discover_manifest_categories (issue #45 / agent-team support)
+# ---------------------------------------------------------------------------
+
+
+def _agent_team_template_info(**overrides) -> dict:
+    """Return a realistic template_info dict for an agent-team project."""
+    info = {
+        "template": {
+            "url": "https://github.com/fips-agents/agent-template",
+            "type": "agent-team",
+            "commit": "abc123",
+            "full_commit": "abc1234567890abcdef",
+        },
+        "project": {"name": "test-team", "created_at": "2026-05-01T00:00:00+00:00"},
+        "generator": {"tool": "fips-agents-cli", "version": "0.13.1"},
+    }
+    info["template"].update(overrides)
+    return info
+
+
+class TestDiscoverManifestCategories:
+    def test_returns_category_names_from_valid_manifest(self, tmp_path, monkeypatch):
+        """When the template ships a well-formed .fips-template.yaml,
+        discover_manifest_categories returns the category names as a list."""
+
+        def fake_clone(url, target_path, branch=None):
+            target_path.mkdir(parents=True, exist_ok=True)
+            (target_path / ".fips-template.yaml").write_text(
+                "schema_version: 1\n"
+                "patch:\n"
+                "  categories:\n"
+                "    docs:\n"
+                "      description: Documentation files\n"
+                "      patterns:\n"
+                "        - CLAUDE.md\n"
+                '        - "docs/**/*"\n'
+                "      ask_before_patch: false\n"
+                "    build:\n"
+                "      description: Build files\n"
+                "      patterns:\n"
+                "        - Makefile\n"
+                "      ask_before_patch: true\n"
+                "    claude:\n"
+                "      description: Claude commands\n"
+                "      patterns:\n"
+                '        - ".claude/commands/**/*"\n'
+                "      ask_before_patch: false\n"
+                "  never_patch:\n"
+                '    - "src/**/*"\n'
+            )
+            return "abc123"
+
+        monkeypatch.setattr(patching, "clone_template", fake_clone)
+        info = _agent_team_template_info()
+        result = discover_manifest_categories(info)
+
+        assert result is not None
+        assert set(result) == {"docs", "build", "claude"}
+
+    def test_returns_none_when_manifest_absent(self, tmp_path, monkeypatch):
+        """Legacy template with no .fips-template.yaml returns None."""
+
+        def fake_clone(url, target_path, branch=None):
+            target_path.mkdir(parents=True, exist_ok=True)
+            (target_path / "Makefile").write_text("# bare template\n")
+            return "abc123"
+
+        monkeypatch.setattr(patching, "clone_template", fake_clone)
+        info = _agent_team_template_info()
+
+        assert discover_manifest_categories(info) is None
+
+    def test_returns_none_when_manifest_malformed(self, tmp_path, monkeypatch):
+        """Manifest exists but is missing required fields (no patch.categories)."""
+
+        def fake_clone(url, target_path, branch=None):
+            target_path.mkdir(parents=True, exist_ok=True)
+            (target_path / ".fips-template.yaml").write_text(
+                "schema_version: 1\n" "patch:\n" "  not_categories: 42\n"
+            )
+            return "abc123"
+
+        monkeypatch.setattr(patching, "clone_template", fake_clone)
+        info = _agent_team_template_info()
+
+        assert discover_manifest_categories(info) is None
+
+    def test_returns_none_for_wrong_schema_version(self, monkeypatch):
+        """Manifest with unsupported schema_version returns None."""
+
+        def fake_clone(url, target_path, branch=None):
+            target_path.mkdir(parents=True, exist_ok=True)
+            (target_path / ".fips-template.yaml").write_text(
+                "schema_version: 99\n" "patch:\n" "  categories: {}\n"
+            )
+            return "abc123"
+
+        monkeypatch.setattr(patching, "clone_template", fake_clone)
+        info = _agent_team_template_info()
+
+        assert discover_manifest_categories(info) is None
+
+    def test_respects_subdir_in_template_info(self, monkeypatch):
+        """When template_info declares a subdir, the manifest is read
+        from the subdirectory, not the clone root."""
+
+        def fake_clone(url, target_path, branch=None):
+            target_path.mkdir(parents=True, exist_ok=True)
+            sub = target_path / "templates" / "agent-team"
+            sub.mkdir(parents=True)
+            (sub / ".fips-template.yaml").write_text(
+                "schema_version: 1\n"
+                "patch:\n"
+                "  categories:\n"
+                "    docs:\n"
+                "      patterns: [CLAUDE.md]\n"
+                "  never_patch: []\n"
+            )
+            return "abc123"
+
+        monkeypatch.setattr(patching, "clone_template", fake_clone)
+        info = _agent_team_template_info(subdir="templates/agent-team")
+
+        result = discover_manifest_categories(info)
+        assert result == ["docs"]
+
+
+# ---------------------------------------------------------------------------
+# E2E test — `patch all` fallback to manifest for manifest-only project types
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_agent_team_project(project_root: Path) -> None:
+    """Build a minimal scaffolded agent-team project. Agent-team is a
+    manifest-only type — no built-in category set in the CLI."""
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / "Makefile").write_text("# team makefile\n")
+    (project_root / "CLAUDE.md").write_text("# team CLAUDE\n")
+
+    claude_cmds = project_root / ".claude" / "commands"
+    claude_cmds.mkdir(parents=True)
+    (claude_cmds / "plan.md").write_text("# plan\n")
+
+    info = _agent_team_template_info()
+    (project_root / ".template-info").write_text(json.dumps(info, indent=2))
+
+
+class TestPatchAllManifestFallback:
+    """When `patch all` encounters a project type with no built-in category
+    set (like agent-team), it falls back to discover_manifest_categories
+    to enumerate the categories from the template's .fips-template.yaml.
+    """
+
+    @pytest.fixture
+    def agent_team_project(self, tmp_path):
+        project = tmp_path / "test-team"
+        _make_fake_agent_team_project(project)
+        return project
+
+    def test_patch_all_processes_manifest_categories(
+        self, agent_team_project, monkeypatch, cli_runner
+    ):
+        """patch all --dry-run discovers categories from the manifest and
+        processes each one without exiting with an error."""
+
+        def fake_clone(url, target_path, branch=None):
+            target_path.mkdir(parents=True, exist_ok=True)
+            # Lay down template files that match the manifest's patterns
+            (target_path / "Makefile").write_text("# UPDATED team makefile\n")
+            (target_path / "CLAUDE.md").write_text("# UPDATED CLAUDE\n")
+            claude_cmds = target_path / ".claude" / "commands"
+            claude_cmds.mkdir(parents=True)
+            (claude_cmds / "plan.md").write_text("# UPDATED plan\n")
+            # Ship the manifest
+            (target_path / ".fips-template.yaml").write_text(
+                "schema_version: 1\n"
+                "patch:\n"
+                "  categories:\n"
+                "    docs:\n"
+                "      description: Documentation files\n"
+                "      patterns:\n"
+                "        - CLAUDE.md\n"
+                "      ask_before_patch: false\n"
+                "    build:\n"
+                "      description: Build files\n"
+                "      patterns:\n"
+                "        - Makefile\n"
+                "      ask_before_patch: false\n"
+                "    claude:\n"
+                "      description: Claude commands\n"
+                "      patterns:\n"
+                '        - ".claude/commands/**/*"\n'
+                "      ask_before_patch: false\n"
+                "  never_patch:\n"
+                '    - "src/**/*"\n'
+            )
+            return "abc123"
+
+        monkeypatch.setattr(patching, "clone_template", fake_clone)
+        monkeypatch.chdir(agent_team_project)
+
+        result = cli_runner.invoke(cli, ["patch", "all", "--dry-run", "--skip-confirmation"])
+        assert result.exit_code == 0, result.output
+        # The manifest fallback message should appear
+        assert "No built-in categories" in result.output
+        assert "checking template manifest" in result.output
+        # All three categories are processed
+        for cat in ("docs", "build", "claude"):
+            assert f"Processing category: {cat}" in result.output
+
+    def test_patch_all_exits_cleanly_when_manifest_also_missing(
+        self, agent_team_project, monkeypatch, cli_runner
+    ):
+        """When the project type has no built-in categories AND the template
+        ships no manifest, patch all exits with a clean error."""
+
+        def fake_clone(url, target_path, branch=None):
+            target_path.mkdir(parents=True, exist_ok=True)
+            # No .fips-template.yaml
+            return "abc123"
+
+        monkeypatch.setattr(patching, "clone_template", fake_clone)
+        monkeypatch.chdir(agent_team_project)
+
+        result = cli_runner.invoke(cli, ["patch", "all", "--skip-confirmation"])
+        assert result.exit_code == 1, result.output
+        assert "Traceback" not in result.output
+        assert "agent-team" in result.output
+        assert ".fips-template.yaml" in result.output

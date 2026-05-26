@@ -10,6 +10,7 @@ from rich.table import Table
 from fips_agents_cli.tools.patching import (
     PatchUnsupportedForProjectType,
     check_for_updates,
+    discover_manifest_categories,
     get_available_categories,
     get_project_type,
     patch_category,
@@ -208,20 +209,26 @@ def all_categories(dry_run: bool, skip_confirmation: bool):
     _, template_info = found
     project_type = get_project_type(template_info)
 
-    # Pre-clone fast-fail: enumerate built-in categories for the project type.
-    # If the type has no built-in set (e.g. sandbox), tell the user upfront —
-    # iterating manifest categories without a Click subcommand for each is a
-    # bigger refactor (see #50 / #45).
+    # Enumerate categories for the project type. Types with built-in constants
+    # (mcp-server, agent, workflow) resolve instantly. Manifest-only types
+    # (agent-team) require cloning the template to read .fips-template.yaml.
     try:
         categories = get_available_categories(project_type)
     except ValueError:
         console.print(
-            f"\n[red]✗[/red] Patching is not supported for project type "
-            f"'{project_type}'. The template repo for this project type does "
-            f"not yet ship a .fips-template.yaml manifest. See "
-            f"https://github.com/fips-agents/fips-agents-cli/issues/45."
+            f"[cyan]No built-in categories for '{project_type}' — "
+            "checking template manifest...[/cyan]"
         )
-        sys.exit(1)
+        categories = discover_manifest_categories(template_info)
+        if categories is None:
+            console.print(
+                f"\n[red]✗[/red] Patching is not supported for project type "
+                f"'{project_type}'. The template repo does not ship a "
+                f".fips-template.yaml manifest, and no built-in category set "
+                f"exists. See "
+                f"https://github.com/fips-agents/fips-agents-cli/issues/45."
+            )
+            sys.exit(1)
 
     if not skip_confirmation:
         confirm = click.confirm("This will update multiple files. Continue?", default=True)

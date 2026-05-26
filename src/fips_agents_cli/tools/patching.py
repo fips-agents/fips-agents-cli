@@ -248,6 +248,34 @@ def get_available_categories(project_type: str = "mcp-server") -> list[str]:
     return list(categories.keys())
 
 
+def discover_manifest_categories(template_info: dict[str, Any]) -> list[str] | None:
+    """Clone the template and read category names from its manifest.
+
+    Used by ``patch all`` when the project type has no built-in category set
+    (e.g. agent-team). Clones the template to a temporary directory, reads
+    ``.fips-template.yaml``, and returns the declared category names.
+
+    Returns None if no manifest is found, it is malformed, or cloning fails.
+    """
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            template_root = _clone_template_for_patch(template_info, temp_path)
+
+            manifest = _load_template_manifest(template_root)
+            if manifest is None:
+                return None
+
+            resolved = _categories_from_manifest(manifest)
+            if resolved is None:
+                return None
+
+            return list(resolved[0].keys())
+    except Exception as e:
+        console.print(f"[yellow]⚠[/yellow] Unable to check template manifest: {e}")
+        return None
+
+
 def _clone_template_for_patch(template_info: dict[str, Any], temp_path: Path) -> Path:
     """
     Clone the template repo and return the comparison root.
