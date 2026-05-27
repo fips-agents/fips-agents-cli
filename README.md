@@ -1036,6 +1036,10 @@ MIT License - see LICENSE file for details
 
 ## Changelog
 
+### Version 0.15.1
+
+- Fix: Reformat test_deploy.py for Black consistency in CI (v0.15.0 release workflow failed due to formatting drift)
+
 ### Version 0.15.0
 
 - Feature: New `fips-agents deploy` command for type-aware OpenShift deployment. Detects project type from `.template-info` and routes to the appropriate workflow: OpenShift binary build for MCP servers, Helm chart deploy for agents and workflows. Supports `--namespace`, `--dry-run`, and `--context` options. Validates prerequisites (`oc`, `helm`), offers to create missing namespaces, warns about Mac architecture on MCP builds, and reads image config from `values.yaml` with fallback prompts for agents (#53)
