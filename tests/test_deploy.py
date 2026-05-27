@@ -141,9 +141,7 @@ class TestCreateNamespace:
 
     @patch("fips_agents_cli.tools.openshift.subprocess.run")
     def test_failure(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=1, stdout="", stderr="error: forbidden"
-        )
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error: forbidden")
         from fips_agents_cli.tools.openshift import create_namespace
 
         success, msg = create_namespace("my-namespace")
