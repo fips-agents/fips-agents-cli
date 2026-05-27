@@ -113,6 +113,7 @@ fips-agents --version
 fips-agents --help
 fips-agents add --help
 fips-agents create --help
+fips-agents deploy --help
 fips-agents generate --help
 fips-agents patch --help
 fips-agents vendor --help
@@ -737,6 +738,42 @@ fips-agents vendor --update
 - **PyPI dependency** (default): Best for teams running multiple agents that share the same fipsagents version. Centralized updates.
 - **Vendored source**: Best for agents that need custom BaseAgent modifications, environments with no PyPI access, or when you want to read and debug the fipsagents source locally.
 
+---
+
+### Deploy Command
+
+The `deploy` command detects project type from `.template-info` and runs the appropriate OpenShift deployment workflow.
+
+| Project Type | Strategy |
+|--------------|----------|
+| `mcp-server` | Binary build via `oc start-build --from-dir`, rollout restart, route display |
+| `agent` | Helm chart deploy via `helm upgrade --install` |
+| `workflow` | Helm chart deploy via `helm upgrade --install` |
+
+```bash
+# Deploy with auto-detected namespace (defaults to project name)
+fips-agents deploy
+
+# Deploy to a specific namespace
+fips-agents deploy -n my-dev-ns
+
+# Preview what would happen
+fips-agents deploy --dry-run
+
+# Use a specific OpenShift context
+fips-agents deploy --context prod-cluster -n my-app
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-n, --namespace` | Target namespace (default: project name) |
+| `--dry-run` | Show deployment plan without executing |
+| `--context` | OpenShift/Kubernetes context for `oc`/`helm` commands |
+
+**Prerequisites:** `oc` CLI installed and authenticated. Agent/workflow projects also require `helm`. The command validates these before proceeding and offers to create the namespace if it doesn't exist.
+
 ## Project Name Requirements
 
 Project names must follow these rules:
@@ -998,6 +1035,11 @@ MIT License - see LICENSE file for details
 - **MCP Protocol**: https://modelcontextprotocol.io/
 
 ## Changelog
+
+### Version 0.15.0
+
+- Feature: New `fips-agents deploy` command for type-aware OpenShift deployment. Detects project type from `.template-info` and routes to the appropriate workflow: OpenShift binary build for MCP servers, Helm chart deploy for agents and workflows. Supports `--namespace`, `--dry-run`, and `--context` options. Validates prerequisites (`oc`, `helm`), offers to create missing namespaces, warns about Mac architecture on MCP builds, and reads image config from `values.yaml` with fallback prompts for agents (#53)
+- New: `tools/openshift.py` module with 13 reusable utility functions wrapping `oc` and `helm` subprocess calls, all enforcing context isolation (`--context` / `-n` on every command)
 
 ### Version 0.14.0
 
