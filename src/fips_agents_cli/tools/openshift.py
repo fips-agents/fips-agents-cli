@@ -355,6 +355,47 @@ def oc_rollout_restart(
         return False, "Rollout restart timed out"
 
 
+def oc_set_image(
+    deployment_name: str,
+    container_name: str,
+    image: str,
+    namespace: str,
+    oc_context: str | None = None,
+) -> tuple[bool, str]:
+    """Set the container image on a deployment, triggering a rollout."""
+    cmd = [
+        "oc",
+        "set",
+        "image",
+        f"deployment/{deployment_name}",
+        f"{container_name}={image}",
+        "-n",
+        namespace,
+    ]
+    if oc_context:
+        cmd.extend(["--context", oc_context])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            return True, output
+        else:
+            error = result.stderr.strip()
+            return False, f"Failed to set image: {error}"
+
+    except FileNotFoundError:
+        return False, "OpenShift CLI (oc) not installed"
+    except subprocess.TimeoutExpired:
+        return False, "Set image timed out"
+
+
 def oc_rollout_status(
     deployment_name: str,
     namespace: str,

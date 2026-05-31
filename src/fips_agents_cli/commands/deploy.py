@@ -21,8 +21,8 @@ from fips_agents_cli.tools.openshift import (
     oc_apply_manifest,
     oc_get_imagestream_registry_path,
     oc_get_route_url,
-    oc_rollout_restart,
     oc_rollout_status,
+    oc_set_image,
     oc_start_build,
     parse_manifest_resource_names,
     read_helm_values,
@@ -151,7 +151,9 @@ def _deploy_mcp_server(
         step += 1
         console.print(f"  {step}. Start build: {build_name}")
         step += 1
-        console.print(f"  {step}. Restart deployment: {deployment_name}")
+        console.print(
+            f"  {step}. Resolve ImageStream and update deployment image: {deployment_name}"
+        )
         step += 1
         console.print(f"  {step}. Wait for rollout status")
         step += 1
@@ -190,13 +192,33 @@ def _deploy_mcp_server(
 
         console.print("[green]✓[/green] Build completed\n")
 
-        console.print(f"[cyan]Restarting deployment: {deployment_name}[/cyan]")
-        success, message = oc_rollout_restart(deployment_name, namespace, oc_context)
-        if not success:
-            console.print(f"[red]✗[/red] Restart failed: {message}")
-            sys.exit(1)
-
-        console.print("[green]✓[/green] Deployment restarted\n")
+        # Resolve ImageStream to get the full internal registry path, then
+        # update the deployment image.  A plain `rollout restart` would
+        # re-use the bare image name from openshift.yaml (e.g.
+        # "mcp-server:latest") which can't be pulled — it needs the full
+        # registry path that the ImageStream provides.
+        imagestream_name = resource_names.get("ImageStream", build_name) if has_manifest else None
+        if imagestream_name:
+            console.print(f"[cyan]Resolving ImageStream: {imagestream_name}[/cyan]")
+            found, resolved = oc_get_imagestream_registry_path(
+                imagestream_name, namespace, oc_context
+            )
+            if found:
+                full_image = f"{resolved}:latest"
+                console.print(f"[green]✓[/green] Resolved image: {full_image}")
+                console.print(f"[cyan]Updating deployment image: {deployment_name}[/cyan]")
+                success, message = oc_set_image(
+                    deployment_name, deployment_name, full_image, namespace, oc_context
+                )
+                if not success:
+                    console.print(f"[red]✗[/red] Failed to update image: {message}")
+                    sys.exit(1)
+                console.print("[green]✓[/green] Deployment image updated\n")
+            else:
+                console.print(f"[yellow]⚠[/yellow] Could not resolve ImageStream: {resolved}")
+                console.print("[yellow]⚠[/yellow] Skipping deployment update")
+        else:
+            console.print("[yellow]⚠[/yellow] No ImageStream found, skipping image update")
 
         console.print("[cyan]Waiting for rollout status...[/cyan]")
         success, message = oc_rollout_status(deployment_name, namespace, oc_context)

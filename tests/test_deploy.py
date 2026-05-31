@@ -252,6 +252,30 @@ class TestOcRolloutRestart:
         assert success is True
 
 
+class TestOcSetImage:
+    """Tests for oc_set_image() function."""
+
+    @patch("fips_agents_cli.tools.openshift.subprocess.run")
+    def test_success(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="image updated", stderr="")
+        from fips_agents_cli.tools.openshift import oc_set_image
+
+        success, msg = oc_set_image("my-deploy", "my-container", "registry/img:v1", "my-ns")
+        assert success is True
+        call_args = mock_run.call_args[0][0]
+        assert "deployment/my-deploy" in call_args
+        assert "my-container=registry/img:v1" in call_args
+
+    @patch("fips_agents_cli.tools.openshift.subprocess.run")
+    def test_failure_returns_stderr(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error: not found")
+        from fips_agents_cli.tools.openshift import oc_set_image
+
+        success, msg = oc_set_image("my-deploy", "my-container", "img:v1", "my-ns")
+        assert success is False
+        assert "error" in msg.lower()
+
+
 class TestOcGetRouteUrl:
     """Tests for oc_get_route_url() function."""
 
@@ -561,8 +585,12 @@ class TestDeployMcpServerSuccess:
                 "fips_agents_cli.commands.deploy.oc_start_build", return_value=(True, "ok")
             ) as mock_build,
             patch(
-                "fips_agents_cli.commands.deploy.oc_rollout_restart", return_value=(True, "ok")
-            ) as mock_restart,
+                "fips_agents_cli.commands.deploy.oc_get_imagestream_registry_path",
+                return_value=(True, "image-registry.svc:5000/my-ns/mcp-server"),
+            ),
+            patch(
+                "fips_agents_cli.commands.deploy.oc_set_image", return_value=(True, "ok")
+            ) as mock_set_image,
             patch(
                 "fips_agents_cli.commands.deploy.oc_rollout_status", return_value=(True, "ok")
             ) as mock_status,
@@ -577,10 +605,11 @@ class TestDeployMcpServerSuccess:
         # Verify build uses resource name from manifest
         mock_build.assert_called_once()
         assert mock_build.call_args[0][0] == "mcp-server"
-        # Verify restart uses deployment name from manifest (just the name, not deployment/ prefix)
-        mock_restart.assert_called_once()
-        assert mock_restart.call_args[0][0] == "mcp-server"
-        # Verify status uses deployment name from manifest (just the name, not deployment/ prefix)
+        # Verify set image was called with resolved ImageStream path
+        mock_set_image.assert_called_once()
+        assert mock_set_image.call_args[0][0] == "mcp-server"
+        assert "image-registry" in mock_set_image.call_args[0][2]
+        # Verify status uses deployment name from manifest
         mock_status.assert_called_once()
         assert mock_status.call_args[0][0] == "mcp-server"
         # Verify route URL lookup uses route name from manifest
@@ -621,7 +650,6 @@ class TestDeployMcpServerWithoutManifest:
             patch(
                 "fips_agents_cli.commands.deploy.oc_start_build", return_value=(True, "ok")
             ) as mock_build,
-            patch("fips_agents_cli.commands.deploy.oc_rollout_restart", return_value=(True, "ok")),
             patch("fips_agents_cli.commands.deploy.oc_rollout_status", return_value=(True, "ok")),
             patch(
                 "fips_agents_cli.commands.deploy.oc_get_route_url",
@@ -797,7 +825,11 @@ class TestDeployNamespaceCreation:
                 return_value=(True, "ok", ctx_dir),
             ),
             patch("fips_agents_cli.commands.deploy.oc_start_build", return_value=(True, "ok")),
-            patch("fips_agents_cli.commands.deploy.oc_rollout_restart", return_value=(True, "ok")),
+            patch(
+                "fips_agents_cli.commands.deploy.oc_get_imagestream_registry_path",
+                return_value=(True, "image-registry.svc:5000/ns/mcp-server"),
+            ),
+            patch("fips_agents_cli.commands.deploy.oc_set_image", return_value=(True, "ok")),
             patch("fips_agents_cli.commands.deploy.oc_rollout_status", return_value=(True, "ok")),
             patch(
                 "fips_agents_cli.commands.deploy.oc_get_route_url",
@@ -847,7 +879,11 @@ class TestDeployWithContext:
             patch(
                 "fips_agents_cli.commands.deploy.oc_start_build", return_value=(True, "ok")
             ) as mock_build,
-            patch("fips_agents_cli.commands.deploy.oc_rollout_restart", return_value=(True, "ok")),
+            patch(
+                "fips_agents_cli.commands.deploy.oc_get_imagestream_registry_path",
+                return_value=(True, "image-registry.svc:5000/ns/mcp-server"),
+            ),
+            patch("fips_agents_cli.commands.deploy.oc_set_image", return_value=(True, "ok")),
             patch("fips_agents_cli.commands.deploy.oc_rollout_status", return_value=(True, "ok")),
             patch(
                 "fips_agents_cli.commands.deploy.oc_get_route_url",
