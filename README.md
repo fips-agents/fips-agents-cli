@@ -1036,6 +1036,13 @@ MIT License - see LICENSE file for details
 
 ## Changelog
 
+### Version 0.15.2
+
+- Fix: `fips-agents deploy` now works end-to-end for both MCP server and agent projects (#55)
+- MCP servers: applies `openshift.yaml` before building and reads resource names (BuildConfig, Deployment, Route) from the manifest instead of deriving them from the project name. Falls back to the old naming convention when no manifest exists
+- Agents: resolves bare image names via ImageStream lookup, auto-enables route (`--route/--no-route`, default on), and supports `--set` for passing Helm value overrides (e.g. `--set config.MODEL_ENDPOINT=https://...`)
+- New utility functions in `tools/openshift.py`: `oc_apply_manifest`, `parse_manifest_resource_names`, `oc_get_imagestream_registry_path`; `helm_deploy` gains a `set_values` parameter
+
 ### Version 0.15.1
 
 - Fix: Reformat test_deploy.py for Black consistency in CI (v0.15.0 release workflow failed due to formatting drift)
