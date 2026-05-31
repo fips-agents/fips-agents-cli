@@ -1036,6 +1036,10 @@ MIT License - see LICENSE file for details
 
 ## Changelog
 
+### Version 0.15.3
+
+- Fix: MCP server deploys now use `oc set image` with the resolved ImageStream path instead of `oc rollout restart`, which was causing ErrImagePull because the bare image name from `openshift.yaml` (e.g. `mcp-server:latest`) can't be pulled directly
+
 ### Version 0.15.2
 
 - Fix: `fips-agents deploy` now works end-to-end for both MCP server and agent projects (#55)
