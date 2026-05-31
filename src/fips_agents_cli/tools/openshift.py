@@ -132,6 +132,102 @@ def create_namespace(namespace: str, context: str | None = None) -> tuple[bool, 
         return False, "Namespace creation timed out"
 
 
+def oc_apply_manifest(
+    manifest_path: Path,
+    namespace: str,
+    oc_context: str | None = None,
+) -> tuple[bool, str]:
+    """Apply a Kubernetes/OpenShift manifest file."""
+    cmd = ["oc", "apply", "-f", str(manifest_path), "-n", namespace]
+    if oc_context:
+        cmd.extend(["--context", oc_context])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            return True, output
+        else:
+            error = result.stderr.strip()
+            return False, f"Failed to apply manifest: {error}"
+
+    except FileNotFoundError:
+        return False, "OpenShift CLI (oc) not installed"
+    except subprocess.TimeoutExpired:
+        return False, "Manifest application timed out"
+
+
+def parse_manifest_resource_names(manifest_path: Path) -> dict[str, str]:
+    """Parse a multi-document YAML manifest and extract resource names by kind.
+
+    Returns a dict mapping Kind to metadata.name, e.g.
+    {"BuildConfig": "mcp-server", "Deployment": "mcp-server", "Route": "mcp-server"}.
+    """
+    yaml = YAML(typ="safe")
+    result = {}
+    try:
+        with open(manifest_path) as f:
+            for doc in yaml.load_all(f):
+                if doc and isinstance(doc, dict):
+                    kind = doc.get("kind")
+                    name = doc.get("metadata", {}).get("name")
+                    if kind and name:
+                        result[kind] = name
+    except Exception:
+        pass
+    return result
+
+
+def oc_get_imagestream_registry_path(
+    name: str,
+    namespace: str,
+    oc_context: str | None = None,
+) -> tuple[bool, str]:
+    """Resolve an ImageStream to its internal registry path."""
+    cmd = [
+        "oc",
+        "get",
+        "imagestream",
+        name,
+        "-n",
+        namespace,
+        "-o",
+        "jsonpath={.status.dockerImageRepository}",
+    ]
+    if oc_context:
+        cmd.extend(["--context", oc_context])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        if result.returncode == 0:
+            repo = result.stdout.strip()
+            if repo:
+                return True, repo
+            return True, f"image-registry.openshift-image-registry.svc:5000/{namespace}/{name}"
+        else:
+            return (
+                False,
+                f"ImageStream '{name}' not found in namespace '{namespace}'",
+            )
+
+    except FileNotFoundError:
+        return False, "OpenShift CLI (oc) not installed"
+    except subprocess.TimeoutExpired:
+        return False, "ImageStream query timed out"
+
+
 def create_build_context(
     project_root: Path, exclude_patterns: list[str] | None = None
 ) -> tuple[bool, str, Path | None]:
@@ -362,6 +458,7 @@ def helm_deploy(
     namespace: str,
     values_file: Path | None = None,
     oc_context: str | None = None,
+    set_values: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Deploy or upgrade a Helm chart."""
     cmd = [
@@ -377,6 +474,8 @@ def helm_deploy(
         cmd.extend(["-f", str(values_file)])
     if oc_context:
         cmd.extend(["--kube-context", oc_context])
+    for sv in set_values or []:
+        cmd.extend(["--set", sv])
 
     try:
         result = subprocess.run(

@@ -22,6 +22,24 @@ def _make_deploy_project(root: Path, project_type: str, project_name: str):
         src = root / "src"
         src.mkdir(exist_ok=True)
         (src / "main.py").write_text("# server\n")
+        # Create openshift.yaml manifest
+        manifest = """---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: mcp-server
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: mcp-server
+"""
+        (root / "openshift.yaml").write_text(manifest)
     elif project_type in ("agent", "workflow"):
         chart = root / "chart"
         chart.mkdir(exist_ok=True)
@@ -304,6 +322,149 @@ class TestHelmDeploy:
         assert "my-ctx" in call_args
 
 
+class TestHelmDeploySetValues:
+    """Tests for helm_deploy() with set_values parameter."""
+
+    @patch("fips_agents_cli.tools.openshift.subprocess.run")
+    def test_passes_set_values(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="deployed", stderr="")
+        from fips_agents_cli.tools.openshift import helm_deploy
+
+        set_values = ["route.enabled=true", "image.repository=foo"]
+        helm_deploy("my-release", Path("/chart"), "my-namespace", set_values=set_values)
+        call_args = mock_run.call_args[0][0]
+        assert "--set" in call_args
+        assert "route.enabled=true" in call_args
+        assert "image.repository=foo" in call_args
+
+
+class TestOcApplyManifest:
+    """Tests for oc_apply_manifest() function."""
+
+    @patch("fips_agents_cli.tools.openshift.subprocess.run")
+    def test_success(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="applied", stderr="")
+        from fips_agents_cli.tools.openshift import oc_apply_manifest
+
+        success, msg = oc_apply_manifest(Path("/manifest.yaml"), "my-namespace")
+        assert success is True
+        call_args = mock_run.call_args[0][0]
+        assert "oc" in call_args
+        assert "apply" in call_args
+        assert "-f" in call_args
+
+    @patch("fips_agents_cli.tools.openshift.subprocess.run")
+    def test_failure_returns_stderr(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error: apply failed")
+        from fips_agents_cli.tools.openshift import oc_apply_manifest
+
+        success, msg = oc_apply_manifest(Path("/manifest.yaml"), "my-namespace")
+        assert success is False
+        assert "error" in msg.lower()
+
+    @patch("fips_agents_cli.tools.openshift.subprocess.run")
+    def test_passes_context_flag(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="applied", stderr="")
+        from fips_agents_cli.tools.openshift import oc_apply_manifest
+
+        oc_apply_manifest(Path("/manifest.yaml"), "my-namespace", oc_context="my-ctx")
+        call_args = mock_run.call_args[0][0]
+        assert "--context" in call_args
+        assert "my-ctx" in call_args
+
+
+class TestParseManifestResourceNames:
+    """Tests for parse_manifest_resource_names() function."""
+
+    def test_parses_multi_document_yaml(self, tmp_path):
+        from fips_agents_cli.tools.openshift import parse_manifest_resource_names
+
+        manifest_content = """---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: mcp-server
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: mcp-server
+"""
+        manifest_path = tmp_path / "manifest.yaml"
+        manifest_path.write_text(manifest_content)
+
+        result = parse_manifest_resource_names(manifest_path)
+        assert result == {
+            "BuildConfig": "mcp-server",
+            "Deployment": "mcp-server",
+            "Route": "mcp-server",
+        }
+
+    def test_returns_empty_dict_for_missing_file(self):
+        from fips_agents_cli.tools.openshift import parse_manifest_resource_names
+
+        result = parse_manifest_resource_names(Path("/nonexistent.yaml"))
+        assert result == {}
+
+    def test_returns_empty_dict_for_invalid_yaml(self, tmp_path):
+        from fips_agents_cli.tools.openshift import parse_manifest_resource_names
+
+        bad_yaml = tmp_path / "bad.yaml"
+        bad_yaml.write_text("not: valid: yaml: [[[")
+
+        result = parse_manifest_resource_names(bad_yaml)
+        assert result == {}
+
+
+class TestOcGetImagestreamRegistryPath:
+    """Tests for oc_get_imagestream_registry_path() function."""
+
+    @patch("fips_agents_cli.tools.openshift.subprocess.run")
+    def test_returns_registry_path(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="image-registry.openshift-image-registry.svc:5000/my-ns/my-image\n",
+            stderr="",
+        )
+        from fips_agents_cli.tools.openshift import oc_get_imagestream_registry_path
+
+        success, path = oc_get_imagestream_registry_path("my-image", "my-ns")
+        assert success is True
+        assert path == "image-registry.openshift-image-registry.svc:5000/my-ns/my-image"
+
+    @patch("fips_agents_cli.tools.openshift.subprocess.run")
+    def test_falls_back_when_no_status(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        from fips_agents_cli.tools.openshift import oc_get_imagestream_registry_path
+
+        success, path = oc_get_imagestream_registry_path("my-image", "my-ns")
+        assert success is True
+        assert "my-ns/my-image" in path
+
+    @patch("fips_agents_cli.tools.openshift.subprocess.run")
+    def test_returns_false_when_not_found(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+        from fips_agents_cli.tools.openshift import oc_get_imagestream_registry_path
+
+        success, msg = oc_get_imagestream_registry_path("my-image", "my-ns")
+        assert success is False
+
+    @patch("fips_agents_cli.tools.openshift.subprocess.run")
+    def test_passes_context_flag(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="registry/ns/image\n", stderr="")
+        from fips_agents_cli.tools.openshift import oc_get_imagestream_registry_path
+
+        oc_get_imagestream_registry_path("my-image", "my-ns", oc_context="my-ctx")
+        call_args = mock_run.call_args[0][0]
+        assert "--context" in call_args
+        assert "my-ctx" in call_args
+
+
 class TestDeployNotInProject:
     """Tests for deploy command outside a project."""
 
@@ -372,6 +533,8 @@ class TestDeployMcpServerDryRun:
             result = cli_runner.invoke(cli, ["deploy", "--dry-run"])
         assert result.exit_code == 0
         assert "plan" in result.output.lower() or "build" in result.output.lower()
+        # Should show manifest apply step since openshift.yaml exists
+        assert "apply" in result.output.lower() or "manifest" in result.output.lower()
 
 
 class TestDeployMcpServerSuccess:
@@ -389,21 +552,87 @@ class TestDeployMcpServerSuccess:
                 return_value=(True, "admin"),
             ),
             patch("fips_agents_cli.commands.deploy.namespace_exists", return_value=True),
+            patch("fips_agents_cli.commands.deploy.oc_apply_manifest", return_value=(True, "ok")),
             patch(
                 "fips_agents_cli.commands.deploy.create_build_context",
                 return_value=(True, "ok", ctx_dir),
             ),
-            patch("fips_agents_cli.commands.deploy.oc_start_build", return_value=(True, "ok")),
-            patch("fips_agents_cli.commands.deploy.oc_rollout_restart", return_value=(True, "ok")),
-            patch("fips_agents_cli.commands.deploy.oc_rollout_status", return_value=(True, "ok")),
+            patch(
+                "fips_agents_cli.commands.deploy.oc_start_build", return_value=(True, "ok")
+            ) as mock_build,
+            patch(
+                "fips_agents_cli.commands.deploy.oc_rollout_restart", return_value=(True, "ok")
+            ) as mock_restart,
+            patch(
+                "fips_agents_cli.commands.deploy.oc_rollout_status", return_value=(True, "ok")
+            ) as mock_status,
             patch(
                 "fips_agents_cli.commands.deploy.oc_get_route_url",
                 return_value=(True, "https://my-server.apps.cluster"),
-            ),
+            ) as mock_route,
         ):
             result = cli_runner.invoke(cli, ["deploy"])
         assert result.exit_code == 0
         assert "Deployed" in result.output
+        # Verify build uses resource name from manifest
+        mock_build.assert_called_once()
+        assert mock_build.call_args[0][0] == "mcp-server"
+        # Verify restart uses deployment name from manifest (just the name, not deployment/ prefix)
+        mock_restart.assert_called_once()
+        assert mock_restart.call_args[0][0] == "mcp-server"
+        # Verify status uses deployment name from manifest (just the name, not deployment/ prefix)
+        mock_status.assert_called_once()
+        assert mock_status.call_args[0][0] == "mcp-server"
+        # Verify route URL lookup uses route name from manifest
+        mock_route.assert_called_once()
+        assert mock_route.call_args[0][0] == "mcp-server"
+
+
+class TestDeployMcpServerWithoutManifest:
+    """Tests for MCP server deployment without openshift.yaml (backward compatibility)."""
+
+    def test_falls_back_without_manifest(self, tmp_path, monkeypatch, cli_runner):
+        # Create project without openshift.yaml
+        root = tmp_path
+        info = {
+            "template": {"type": "mcp-server", "url": "https://example.com", "commit": "abc123"},
+            "project": {"name": "my-server", "created_at": "2026-01-01T00:00:00+00:00"},
+            "generator": {"tool": "fips-agents-cli", "version": "0.0.0"},
+        }
+        (root / ".template-info").write_text(json.dumps(info, indent=2))
+        src = root / "src"
+        src.mkdir()
+        (src / "main.py").write_text("# server\n")
+        # NOTE: no openshift.yaml created
+        monkeypatch.chdir(root)
+        ctx_dir = tmp_path / "build-ctx"
+        ctx_dir.mkdir()
+        with (
+            patch("fips_agents_cli.commands.deploy.is_oc_installed", return_value=True),
+            patch(
+                "fips_agents_cli.commands.deploy.is_oc_authenticated",
+                return_value=(True, "admin"),
+            ),
+            patch("fips_agents_cli.commands.deploy.namespace_exists", return_value=True),
+            patch(
+                "fips_agents_cli.commands.deploy.create_build_context",
+                return_value=(True, "ok", ctx_dir),
+            ),
+            patch(
+                "fips_agents_cli.commands.deploy.oc_start_build", return_value=(True, "ok")
+            ) as mock_build,
+            patch("fips_agents_cli.commands.deploy.oc_rollout_restart", return_value=(True, "ok")),
+            patch("fips_agents_cli.commands.deploy.oc_rollout_status", return_value=(True, "ok")),
+            patch(
+                "fips_agents_cli.commands.deploy.oc_get_route_url",
+                return_value=(True, "https://route.url"),
+            ),
+        ):
+            result = cli_runner.invoke(cli, ["deploy"])
+        assert result.exit_code == 0
+        # Should use project-name-based naming without manifest
+        mock_build.assert_called_once()
+        assert mock_build.call_args[0][0] == "my-server-build"
 
 
 class TestDeployAgentDryRun:
@@ -440,11 +669,108 @@ class TestDeployAgentSuccess:
             ),
             patch("fips_agents_cli.commands.deploy.namespace_exists", return_value=True),
             patch("fips_agents_cli.commands.deploy.is_helm_installed", return_value=True),
-            patch("fips_agents_cli.commands.deploy.helm_deploy", return_value=(True, "ok")),
+            patch(
+                "fips_agents_cli.commands.deploy.oc_get_imagestream_registry_path",
+                return_value=(
+                    True,
+                    "image-registry.openshift-image-registry.svc:5000/my-ns/my-agent",
+                ),
+            ),
+            patch(
+                "fips_agents_cli.commands.deploy.helm_deploy", return_value=(True, "ok")
+            ) as mock_helm,
+            patch(
+                "fips_agents_cli.commands.deploy.oc_get_route_url",
+                return_value=(True, "https://my-agent.apps.cluster"),
+            ),
         ):
             result = cli_runner.invoke(cli, ["deploy"])
         assert result.exit_code == 0
         assert "Deployed" in result.output
+        # Verify helm_deploy was called with set_values containing route.enabled=true and resolved image
+        mock_helm.assert_called_once()
+        set_vals = mock_helm.call_args[0][5] if len(mock_helm.call_args[0]) > 5 else None
+        assert set_vals is not None
+        assert "route.enabled=true" in set_vals
+        assert any("image.repository=" in val for val in set_vals)
+        # Verify route URL appears in output
+        assert "https://my-agent.apps.cluster" in result.output
+
+
+class TestDeployAgentWithSetValues:
+    """Tests for agent deployment with --set values."""
+
+    def test_passes_set_values_to_helm(self, tmp_path, monkeypatch, cli_runner):
+        _make_deploy_project(tmp_path, "agent", "my-agent")
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch("fips_agents_cli.commands.deploy.is_oc_installed", return_value=True),
+            patch(
+                "fips_agents_cli.commands.deploy.is_oc_authenticated",
+                return_value=(True, "admin"),
+            ),
+            patch("fips_agents_cli.commands.deploy.namespace_exists", return_value=True),
+            patch("fips_agents_cli.commands.deploy.is_helm_installed", return_value=True),
+            patch(
+                "fips_agents_cli.commands.deploy.oc_get_imagestream_registry_path",
+                return_value=(False, "not found"),
+            ),
+            patch(
+                "fips_agents_cli.commands.deploy.helm_deploy", return_value=(True, "ok")
+            ) as mock_helm,
+            patch(
+                "fips_agents_cli.commands.deploy.oc_get_route_url",
+                return_value=(True, "https://route.url"),
+            ),
+        ):
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "deploy",
+                    "--set",
+                    "config.MODEL_NAME=gpt-4",
+                    "--set",
+                    "config.OPENAI_API_KEY=sk-test",
+                ],
+            )
+        assert result.exit_code == 0
+        # Verify set_values were passed (last arg to helm_deploy)
+        mock_helm.assert_called_once()
+        set_vals = mock_helm.call_args[0][5] if len(mock_helm.call_args[0]) > 5 else None
+        assert set_vals is not None
+        # The set_values list should contain the user values plus route.enabled=true
+        assert "config.MODEL_NAME=gpt-4" in set_vals
+        assert "config.OPENAI_API_KEY=sk-test" in set_vals
+        assert "route.enabled=true" in set_vals
+
+
+class TestDeployAgentNoRoute:
+    """Tests for agent deployment with --no-route."""
+
+    def test_no_route_skips_route_enabled(self, tmp_path, monkeypatch, cli_runner):
+        _make_deploy_project(tmp_path, "agent", "my-agent")
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch("fips_agents_cli.commands.deploy.is_oc_installed", return_value=True),
+            patch(
+                "fips_agents_cli.commands.deploy.is_oc_authenticated",
+                return_value=(True, "admin"),
+            ),
+            patch("fips_agents_cli.commands.deploy.namespace_exists", return_value=True),
+            patch("fips_agents_cli.commands.deploy.is_helm_installed", return_value=True),
+            patch(
+                "fips_agents_cli.commands.deploy.oc_get_imagestream_registry_path",
+                return_value=(False, "not found"),
+            ),
+            patch(
+                "fips_agents_cli.commands.deploy.helm_deploy", return_value=(True, "ok")
+            ) as mock_helm,
+        ):
+            result = cli_runner.invoke(cli, ["deploy", "--no-route"])
+        assert result.exit_code == 0
+        # Verify route.enabled=true was NOT in set_values
+        set_vals = mock_helm.call_args[0][5] if len(mock_helm.call_args[0]) > 5 else None
+        assert set_vals is None or "route.enabled=true" not in (set_vals or [])
 
 
 class TestDeployNamespaceCreation:
@@ -465,6 +791,7 @@ class TestDeployNamespaceCreation:
             patch(
                 "fips_agents_cli.commands.deploy.create_namespace", return_value=(True, "ok")
             ) as mock_create,
+            patch("fips_agents_cli.commands.deploy.oc_apply_manifest", return_value=(True, "ok")),
             patch(
                 "fips_agents_cli.commands.deploy.create_build_context",
                 return_value=(True, "ok", ctx_dir),
@@ -512,6 +839,7 @@ class TestDeployWithContext:
                 return_value=(True, "admin"),
             ) as mock_auth,
             patch("fips_agents_cli.commands.deploy.namespace_exists", return_value=True),
+            patch("fips_agents_cli.commands.deploy.oc_apply_manifest", return_value=(True, "ok")),
             patch(
                 "fips_agents_cli.commands.deploy.create_build_context",
                 return_value=(True, "ok", ctx_dir),

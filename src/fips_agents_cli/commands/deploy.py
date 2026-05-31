@@ -18,10 +18,13 @@ from fips_agents_cli.tools.openshift import (
     is_oc_authenticated,
     is_oc_installed,
     namespace_exists,
+    oc_apply_manifest,
+    oc_get_imagestream_registry_path,
     oc_get_route_url,
     oc_rollout_restart,
     oc_rollout_status,
     oc_start_build,
+    parse_manifest_resource_names,
     read_helm_values,
 )
 from fips_agents_cli.tools.patching import get_project_type
@@ -42,7 +45,16 @@ SUPPORTED_DEPLOY_TYPES = {
     "--dry-run", is_flag=True, default=False, help="Show what would happen without executing"
 )
 @click.option("--context", default=None, help="OpenShift/Kubernetes context")
-def deploy(namespace, dry_run, context):
+@click.option(
+    "--set",
+    "set_values",
+    multiple=True,
+    help="Set Helm values (key=value), can be specified multiple times",
+)
+@click.option(
+    "--route/--no-route", default=True, help="Enable route for external access (default: enabled)"
+)
+def deploy(namespace, dry_run, context, set_values, route):
     """Deploy fips-agents project to OpenShift."""
     console.print("\n[bold cyan]Deploying to OpenShift[/bold cyan]\n")
 
@@ -102,7 +114,9 @@ def deploy(namespace, dry_run, context):
     if project_type == "mcp-server":
         _deploy_mcp_server(project_root, project_name, target_namespace, context, dry_run)
     elif project_type in ("agent", "workflow"):
-        _deploy_agent(project_root, project_name, target_namespace, context, dry_run)
+        _deploy_agent(
+            project_root, project_name, target_namespace, context, dry_run, set_values, route
+        )
 
 
 def _deploy_mcp_server(
@@ -113,19 +127,48 @@ def _deploy_mcp_server(
             "[yellow]⚠[/yellow] Building on macOS: ensure BuildConfig uses linux/amd64 platform\n"
         )
 
-    build_name = f"{project_name}-build"
+    # Determine resource names from openshift.yaml or fall back to project name
+    manifest_path = project_root / "openshift.yaml"
+    if manifest_path.exists():
+        resource_names = parse_manifest_resource_names(manifest_path)
+        build_name = resource_names.get("BuildConfig", f"{project_name}-build")
+        deployment_name = resource_names.get("Deployment", project_name)
+        route_name = resource_names.get("Route", deployment_name)
+        has_manifest = True
+    else:
+        build_name = f"{project_name}-build"
+        deployment_name = project_name
+        route_name = project_name
+        has_manifest = False
 
     if dry_run:
         console.print("[bold]Deployment plan:[/bold]")
-        console.print(f"  1. Create build context from {project_root}")
-        console.print(f"  2. Start build: {build_name}")
-        console.print(f"  3. Restart deployment: {project_name}")
-        console.print("  4. Wait for rollout status")
-        console.print(f"  5. Get route URL for {project_name}")
+        step = 1
+        if has_manifest:
+            console.print(f"  {step}. Apply manifest: {manifest_path.name}")
+            step += 1
+        console.print(f"  {step}. Create build context from {project_root}")
+        step += 1
+        console.print(f"  {step}. Start build: {build_name}")
+        step += 1
+        console.print(f"  {step}. Restart deployment: {deployment_name}")
+        step += 1
+        console.print(f"  {step}. Wait for rollout status")
+        step += 1
+        console.print(f"  {step}. Get route URL for {route_name}")
         return
 
     context_dir = None
     try:
+        # Apply manifest if present
+        if has_manifest:
+            console.print(f"[cyan]Applying manifest: {manifest_path.name}[/cyan]")
+            success, message = oc_apply_manifest(manifest_path, namespace, oc_context)
+            if not success:
+                console.print(f"[red]✗[/red] Failed to apply manifest: {message}")
+                sys.exit(1)
+            console.print("[green]✓[/green] Manifest applied\n")
+
         with Progress(
             SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console
         ) as progress:
@@ -147,8 +190,8 @@ def _deploy_mcp_server(
 
         console.print("[green]✓[/green] Build completed\n")
 
-        console.print(f"[cyan]Restarting deployment: {project_name}[/cyan]")
-        success, message = oc_rollout_restart(project_name, namespace, oc_context)
+        console.print(f"[cyan]Restarting deployment: {deployment_name}[/cyan]")
+        success, message = oc_rollout_restart(deployment_name, namespace, oc_context)
         if not success:
             console.print(f"[red]✗[/red] Restart failed: {message}")
             sys.exit(1)
@@ -156,13 +199,13 @@ def _deploy_mcp_server(
         console.print("[green]✓[/green] Deployment restarted\n")
 
         console.print("[cyan]Waiting for rollout status...[/cyan]")
-        success, message = oc_rollout_status(project_name, namespace, oc_context)
+        success, message = oc_rollout_status(deployment_name, namespace, oc_context)
         if not success:
             console.print(f"[yellow]⚠[/yellow] Rollout status check: {message}")
         else:
             console.print("[green]✓[/green] Rollout complete\n")
 
-        success, url_or_error = oc_get_route_url(project_name, namespace, oc_context)
+        success, url_or_error = oc_get_route_url(route_name, namespace, oc_context)
         route_url = url_or_error if success else "(no route found)"
 
         console.print(
@@ -181,7 +224,13 @@ def _deploy_mcp_server(
 
 
 def _deploy_agent(
-    project_root: Path, project_name: str, namespace: str, oc_context: str | None, dry_run: bool
+    project_root: Path,
+    project_name: str,
+    namespace: str,
+    oc_context: str | None,
+    dry_run: bool,
+    set_values: tuple[str, ...],
+    route: bool,
 ):
     if not is_helm_installed():
         console.print("[red]✗[/red] Helm not found")
@@ -216,12 +265,34 @@ def _deploy_agent(
 
         console.print(f"[green]✓[/green] Image: {image_repo}:{image_tag}\n")
 
+    # Build the list of --set values to pass to Helm
+    helm_set_values = list(set_values)
+
+    # Resolve bare image names (no registry prefix) via ImageStream
+    if image_repo and "/" not in image_repo and ":" not in image_repo:
+        console.print(f"[cyan]Resolving ImageStream for: {image_repo}[/cyan]")
+        found, resolved = oc_get_imagestream_registry_path(image_repo, namespace, oc_context)
+        if found:
+            console.print(f"[green]✓[/green] Resolved image: {resolved}")
+            helm_set_values.append(f"image.repository={resolved}")
+        else:
+            console.print(
+                f"[yellow]⚠[/yellow] ImageStream not found, using bare name: {image_repo}"
+            )
+
+    # Enable route by default
+    if route:
+        helm_set_values.append("route.enabled=true")
+
     if dry_run:
         console.print("[bold]Deployment plan:[/bold]")
-        console.print(
+        helm_cmd = (
             f"  helm upgrade --install {project_name} {chart_dir} "
             f"--namespace {namespace} --create-namespace"
         )
+        console.print(helm_cmd)
+        for sv in helm_set_values:
+            console.print(f"    --set {sv}")
         if oc_context:
             console.print(f"  (using context: {oc_context})")
         return
@@ -229,17 +300,28 @@ def _deploy_agent(
     values_file = chart_dir / "values.yaml" if (chart_dir / "values.yaml").exists() else None
 
     console.print("[cyan]Deploying with Helm...[/cyan]")
-    success, message = helm_deploy(project_name, chart_dir, namespace, values_file, oc_context)
+    success, message = helm_deploy(
+        project_name, chart_dir, namespace, values_file, oc_context, helm_set_values or None
+    )
     if not success:
         console.print(f"[red]✗[/red] Helm deployment failed: {message}")
         sys.exit(1)
+
+    # Query route URL if route was enabled
+    route_url = None
+    if route:
+        success, url_or_error = oc_get_route_url(project_name, namespace, oc_context)
+        route_url = url_or_error if success else None
+
+    route_line = f"\nRoute: {route_url}" if route_url else ""
 
     console.print(
         Panel(
             f"[bold green]Agent Deployed Successfully[/bold green]\n\n"
             f"Project: {project_name}\n"
             f"Namespace: {namespace}\n"
-            f"Release: {project_name}\n\n"
+            f"Release: {project_name}"
+            f"{route_line}\n\n"
             f"Check status: helm status {project_name} -n {namespace}",
             border_style="green",
         )
