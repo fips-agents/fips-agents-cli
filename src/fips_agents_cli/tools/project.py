@@ -782,17 +782,33 @@ def vendor_fipsagents_from_clone(
                 version = line.split("=")[1].strip().strip('"').strip("'")
                 break
 
+    # Read HEAD commit from clone
+    import git as gitmodule
+
+    commit_full = "unknown"
+    commit_short = "unknown"
+    try:
+        repo = gitmodule.Repo(str(clone_path))
+        commit_full = repo.head.commit.hexsha
+        commit_short = commit_full[:7]
+    except Exception:
+        pass
+
     # Write VENDORED marker
     marker = dest / "VENDORED"
     marker.write_text(
         f"version: {version}\n"
         f"vendored: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
         f"source: https://github.com/fips-agents/agent-template\n"
+        f"commit: {commit_full}\n"
+        f"commit_short: {commit_short}\n"
         f"\n"
         f"This fipsagents source is vendored into the project.\n"
         f"To update: fips-agents vendor --update\n"
     )
-    console.print(f"[green]✓[/green] Wrote VENDORED marker (version {version})")
+    console.print(
+        f"[green]✓[/green] Wrote VENDORED marker (version {version}, commit {commit_short})"
+    )
 
 
 def rewrite_pyproject_for_vendored(project_path: Path) -> None:

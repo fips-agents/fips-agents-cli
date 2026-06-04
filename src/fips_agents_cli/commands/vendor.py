@@ -134,8 +134,19 @@ def vendor(update: bool, tag: str | None):
             if not is_already_vendored:
                 rewrite_pyproject_for_vendored(project_path)
 
+        # Read commit from VENDORED marker
+        vendored_commit = "unknown"
+        marker_path = project_path / "src" / "fipsagents" / "VENDORED"
+        if marker_path.exists():
+            for line in marker_path.read_text().splitlines():
+                if line.startswith("commit_short:"):
+                    vendored_commit = line.split(":", 1)[1].strip()
+                    break
+
         # Success
-        console.print("\n[bold green]Vendoring complete![/bold green]\n")
+        console.print(
+            f"\n[bold green]Vendoring complete![/bold green] (commit {vendored_commit})\n"
+        )
         console.print("Next steps:")
         console.print("  1. pip install -e .          # Reinstall with vendored source")
         console.print("  2. make test                 # Verify everything works")
