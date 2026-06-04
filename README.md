@@ -1036,6 +1036,10 @@ MIT License - see LICENSE file for details
 
 ## Changelog
 
+### Version 0.16.0
+
+- Feature: `fips-agents vendor` now tracks the upstream commit hash in the VENDORED marker file, enabling reproducible builds and stale-detection. The marker file records the exact commit the vendored source was pulled from, so future `--update` runs can detect when upstream has moved forward. Closes #58
+
 ### Version 0.15.3
 
 - Fix: MCP server deploys now use `oc set image` with the resolved ImageStream path instead of `oc rollout restart`, which was causing ErrImagePull because the bare image name from `openshift.yaml` (e.g. `mcp-server:latest`) can't be pulled directly
