@@ -21,6 +21,7 @@ from fips_agents_cli.tools.openshift import (
     oc_apply_manifest,
     oc_get_imagestream_registry_path,
     oc_get_route_url,
+    oc_new_build,
     oc_rollout_status,
     oc_set_image,
     oc_start_build,
@@ -266,85 +267,179 @@ def _deploy_agent(
 
     console.print(f"[green]✓[/green] Found Helm chart: {chart_dir}\n")
 
+    if is_mac_platform():
+        console.print(
+            "[yellow]⚠[/yellow] Building on macOS: ensure BuildConfig uses linux/amd64 platform\n"
+        )
+
     values = read_helm_values(chart_dir)
     if values is None:
         console.print("[yellow]⚠[/yellow] Could not read values.yaml, using defaults")
         image_repo = None
-        image_tag = "latest"
     else:
         image_config = values.get("image", {})
         image_repo = image_config.get("repository")
-        image_tag = image_config.get("tag", "latest")
-
-        if not image_repo or image_repo == "agent-template":
-            console.print(
-                "[yellow]⚠[/yellow] Image repository not configured or uses template default"
-            )
-            image_repo = click.prompt("Enter container image repository")
-
-        if not image_tag:
-            image_tag = click.prompt("Enter image tag", default="latest")
-
-        console.print(f"[green]✓[/green] Image: {image_repo}:{image_tag}\n")
 
     # Build the list of --set values to pass to Helm
     helm_set_values = list(set_values)
 
-    # Resolve bare image names (no registry prefix) via ImageStream
-    if image_repo and "/" not in image_repo and ":" not in image_repo:
-        console.print(f"[cyan]Resolving ImageStream for: {image_repo}[/cyan]")
-        found, resolved = oc_get_imagestream_registry_path(image_repo, namespace, oc_context)
-        if found:
-            console.print(f"[green]✓[/green] Resolved image: {resolved}")
-            helm_set_values.append(f"image.repository={resolved}")
-        else:
-            console.print(
-                f"[yellow]⚠[/yellow] ImageStream not found, using bare name: {image_repo}"
-            )
+    # Bug fix: if any --set targets a key under a null YAML map (e.g.
+    # ``config: # only comments``  which parses as ``config: null``),
+    # Helm's --set will fail with "interface conversion: interface {} is
+    # nil, not map[interface {}]".  Pre-initialise those top-level keys
+    # to empty maps so --set can drill into them.
+    if values is not None:
+        _ensure_nonempty_maps_for_set_values(chart_dir, values, helm_set_values)
 
-    # Enable route by default
-    if route:
-        helm_set_values.append("route.enabled=true")
+    build_name = project_name
 
     if dry_run:
         console.print("[bold]Deployment plan:[/bold]")
+        step = 1
+        console.print(f"  {step}. Create binary BuildConfig: {build_name}")
+        step += 1
+        console.print(f"  {step}. Create build context from {project_root}")
+        step += 1
+        console.print(f"  {step}. Start build: {build_name}")
+        step += 1
+        console.print(f"  {step}. Resolve ImageStream: {build_name}")
+        step += 1
         helm_cmd = (
-            f"  helm upgrade --install {project_name} {chart_dir} "
-            f"--namespace {namespace} --create-namespace"
+            f"  {step}. helm upgrade --install {project_name} {chart_dir} "
+            f"--namespace {namespace}"
         )
         console.print(helm_cmd)
         for sv in helm_set_values:
-            console.print(f"    --set {sv}")
+            console.print(f"      --set {sv}")
+        step += 1
+        if route:
+            console.print(f"  {step}. Get route URL for {project_name}")
         if oc_context:
             console.print(f"  (using context: {oc_context})")
         return
 
-    values_file = chart_dir / "values.yaml" if (chart_dir / "values.yaml").exists() else None
+    context_dir = None
+    try:
+        # --- Build pipeline (mirrors _deploy_mcp_server) ---
+        console.print(f"[cyan]Creating BuildConfig: {build_name}[/cyan]")
+        success, message = oc_new_build(build_name, namespace, oc_context)
+        if not success:
+            console.print(f"[red]✗[/red] Failed to create BuildConfig: {message}")
+            sys.exit(1)
+        console.print(f"[green]✓[/green] BuildConfig ready: {build_name}\n")
 
-    console.print("[cyan]Deploying with Helm...[/cyan]")
-    success, message = helm_deploy(
-        project_name, chart_dir, namespace, values_file, oc_context, helm_set_values or None
-    )
-    if not success:
-        console.print(f"[red]✗[/red] Helm deployment failed: {message}")
-        sys.exit(1)
+        with Progress(
+            SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console
+        ) as progress:
+            task = progress.add_task("Creating build context...", total=None)
+            success, message, context_dir = create_build_context(project_root)
+            progress.update(task, completed=True)
 
-    # Query route URL if route was enabled
-    route_url = None
-    if route:
-        success, url_or_error = oc_get_route_url(project_name, namespace, oc_context)
-        route_url = url_or_error if success else None
+        if not success:
+            console.print(f"[red]✗[/red] Failed to create build context: {message}")
+            sys.exit(1)
 
-    route_line = f"\nRoute: {route_url}" if route_url else ""
+        console.print("[green]✓[/green] Build context created")
 
-    console.print(
-        Panel(
-            f"[bold green]Agent Deployed Successfully[/bold green]\n\n"
-            f"Project: {project_name}\n"
-            f"Namespace: {namespace}\n"
-            f"Release: {project_name}"
-            f"{route_line}\n\n"
-            f"Check status: helm status {project_name} -n {namespace}",
-            border_style="green",
+        console.print(f"\n[cyan]Starting build: {build_name}[/cyan]")
+        success, message = oc_start_build(build_name, context_dir, namespace, oc_context)
+        if not success:
+            console.print(f"[red]✗[/red] Build failed: {message}")
+            sys.exit(1)
+
+        console.print("[green]✓[/green] Build completed\n")
+
+        # Resolve ImageStream to get the full internal registry path
+        console.print(f"[cyan]Resolving ImageStream: {build_name}[/cyan]")
+        found, resolved = oc_get_imagestream_registry_path(build_name, namespace, oc_context)
+        if found:
+            full_image = f"{resolved}:latest"
+            console.print(f"[green]✓[/green] Resolved image: {full_image}")
+            helm_set_values.append(f"image.repository={resolved}")
+            helm_set_values.append("image.tag=latest")
+        else:
+            console.print(f"[yellow]⚠[/yellow] Could not resolve ImageStream: {resolved}")
+            if image_repo:
+                console.print(f"[yellow]⚠[/yellow] Falling back to values.yaml image: {image_repo}")
+
+        # --- Helm deploy ---
+        # Enable route by default
+        if route:
+            helm_set_values.append("route.enabled=true")
+
+        values_file = chart_dir / "values.yaml" if (chart_dir / "values.yaml").exists() else None
+
+        console.print("[cyan]Deploying with Helm...[/cyan]")
+        success, message = helm_deploy(
+            project_name, chart_dir, namespace, values_file, oc_context, helm_set_values or None
         )
-    )
+        if not success:
+            console.print(f"[red]✗[/red] Helm deployment failed: {message}")
+            sys.exit(1)
+
+        # Query route URL if route was enabled
+        route_url = None
+        if route:
+            success, url_or_error = oc_get_route_url(project_name, namespace, oc_context)
+            route_url = url_or_error if success else None
+
+        route_line = f"\nRoute: {route_url}" if route_url else ""
+
+        console.print(
+            Panel(
+                f"[bold green]Agent Deployed Successfully[/bold green]\n\n"
+                f"Project: {project_name}\n"
+                f"Namespace: {namespace}\n"
+                f"Release: {project_name}"
+                f"{route_line}\n\n"
+                f"Check status: helm status {project_name} -n {namespace}",
+                border_style="green",
+            )
+        )
+
+    finally:
+        if context_dir is not None:
+            shutil.rmtree(context_dir, ignore_errors=True)
+
+
+def _ensure_nonempty_maps_for_set_values(
+    chart_dir: Path, values: dict, set_values: list[str]
+) -> None:
+    """Patch values.yaml in-place to replace null top-level keys with ``{}``
+    when ``--set`` targets sub-keys beneath them.
+
+    Helm's ``--set config.FOO=bar`` fails when the values file has
+    ``config:`` with only comments (YAML null).  We detect which top-level
+    keys are null yet targeted by a ``--set`` dotted path, and rewrite those
+    entries to empty maps so Helm can merge into them.
+    """
+    from ruamel.yaml import YAML
+
+    # Collect top-level keys targeted by dotted --set paths
+    targeted_keys: set[str] = set()
+    for sv in set_values:
+        key_part = sv.split("=", 1)[0] if "=" in sv else sv
+        parts = key_part.split(".")
+        if len(parts) > 1:
+            targeted_keys.add(parts[0])
+
+    # Find which targeted keys are null in current values
+    null_keys = {k for k in targeted_keys if k in values and values[k] is None}
+    if not null_keys:
+        return
+
+    values_file = chart_dir / "values.yaml"
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    with open(values_file) as f:
+        data = yaml.load(f)
+
+    changed = False
+    for key in null_keys:
+        if key in data and data[key] is None:
+            data[key] = {}
+            changed = True
+
+    if changed:
+        with open(values_file, "w") as f:
+            yaml.dump(data, f)

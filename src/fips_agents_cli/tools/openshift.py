@@ -539,6 +539,50 @@ def helm_deploy(
         return False, "Helm deployment timed out after 300 seconds"
 
 
+def oc_new_build(
+    name: str,
+    namespace: str,
+    oc_context: str | None = None,
+) -> tuple[bool, str]:
+    """Create a new binary BuildConfig via ``oc new-build --binary``.
+
+    This is idempotent: if the BuildConfig already exists, OpenShift returns
+    success (or an "already exists" error which we treat as success).
+    """
+    cmd = [
+        "oc",
+        "new-build",
+        "--binary",
+        f"--name={name}",
+        "--strategy=docker",
+        "-n",
+        namespace,
+    ]
+    if oc_context:
+        cmd.extend(["--context", oc_context])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        if result.returncode == 0:
+            return True, result.stdout.strip()
+        else:
+            error = result.stderr.strip()
+            if "already exists" in error.lower():
+                return True, f"BuildConfig '{name}' already exists"
+            return False, f"Failed to create BuildConfig: {error}"
+
+    except FileNotFoundError:
+        return False, "OpenShift CLI (oc) not installed"
+    except subprocess.TimeoutExpired:
+        return False, "oc new-build timed out"
+
+
 def is_mac_platform() -> bool:
     """Check if running on macOS."""
     return platform.system() == "Darwin"

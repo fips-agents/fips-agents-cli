@@ -689,6 +689,8 @@ class TestDeployAgentSuccess:
     def test_full_helm_deploy(self, tmp_path, monkeypatch, cli_runner):
         _make_deploy_project(tmp_path, "agent", "my-agent")
         monkeypatch.chdir(tmp_path)
+        ctx_dir = tmp_path / "build-ctx"
+        ctx_dir.mkdir()
         with (
             patch("fips_agents_cli.commands.deploy.is_oc_installed", return_value=True),
             patch(
@@ -697,6 +699,16 @@ class TestDeployAgentSuccess:
             ),
             patch("fips_agents_cli.commands.deploy.namespace_exists", return_value=True),
             patch("fips_agents_cli.commands.deploy.is_helm_installed", return_value=True),
+            patch(
+                "fips_agents_cli.commands.deploy.oc_new_build", return_value=(True, "ok")
+            ),
+            patch(
+                "fips_agents_cli.commands.deploy.create_build_context",
+                return_value=(True, "ok", ctx_dir),
+            ),
+            patch(
+                "fips_agents_cli.commands.deploy.oc_start_build", return_value=(True, "ok")
+            ) as mock_build,
             patch(
                 "fips_agents_cli.commands.deploy.oc_get_imagestream_registry_path",
                 return_value=(
@@ -715,6 +727,8 @@ class TestDeployAgentSuccess:
             result = cli_runner.invoke(cli, ["deploy"])
         assert result.exit_code == 0
         assert "Deployed" in result.output
+        # Verify build was triggered
+        mock_build.assert_called_once()
         # Verify helm_deploy was called with set_values containing route.enabled=true and resolved image
         mock_helm.assert_called_once()
         set_vals = mock_helm.call_args[0][5] if len(mock_helm.call_args[0]) > 5 else None
@@ -731,6 +745,8 @@ class TestDeployAgentWithSetValues:
     def test_passes_set_values_to_helm(self, tmp_path, monkeypatch, cli_runner):
         _make_deploy_project(tmp_path, "agent", "my-agent")
         monkeypatch.chdir(tmp_path)
+        ctx_dir = tmp_path / "build-ctx"
+        ctx_dir.mkdir()
         with (
             patch("fips_agents_cli.commands.deploy.is_oc_installed", return_value=True),
             patch(
@@ -739,6 +755,12 @@ class TestDeployAgentWithSetValues:
             ),
             patch("fips_agents_cli.commands.deploy.namespace_exists", return_value=True),
             patch("fips_agents_cli.commands.deploy.is_helm_installed", return_value=True),
+            patch("fips_agents_cli.commands.deploy.oc_new_build", return_value=(True, "ok")),
+            patch(
+                "fips_agents_cli.commands.deploy.create_build_context",
+                return_value=(True, "ok", ctx_dir),
+            ),
+            patch("fips_agents_cli.commands.deploy.oc_start_build", return_value=(True, "ok")),
             patch(
                 "fips_agents_cli.commands.deploy.oc_get_imagestream_registry_path",
                 return_value=(False, "not found"),
@@ -778,6 +800,8 @@ class TestDeployAgentNoRoute:
     def test_no_route_skips_route_enabled(self, tmp_path, monkeypatch, cli_runner):
         _make_deploy_project(tmp_path, "agent", "my-agent")
         monkeypatch.chdir(tmp_path)
+        ctx_dir = tmp_path / "build-ctx"
+        ctx_dir.mkdir()
         with (
             patch("fips_agents_cli.commands.deploy.is_oc_installed", return_value=True),
             patch(
@@ -786,6 +810,12 @@ class TestDeployAgentNoRoute:
             ),
             patch("fips_agents_cli.commands.deploy.namespace_exists", return_value=True),
             patch("fips_agents_cli.commands.deploy.is_helm_installed", return_value=True),
+            patch("fips_agents_cli.commands.deploy.oc_new_build", return_value=(True, "ok")),
+            patch(
+                "fips_agents_cli.commands.deploy.create_build_context",
+                return_value=(True, "ok", ctx_dir),
+            ),
+            patch("fips_agents_cli.commands.deploy.oc_start_build", return_value=(True, "ok")),
             patch(
                 "fips_agents_cli.commands.deploy.oc_get_imagestream_registry_path",
                 return_value=(False, "not found"),
