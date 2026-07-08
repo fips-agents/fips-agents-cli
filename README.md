@@ -747,8 +747,8 @@ The `deploy` command detects project type from `.template-info` and runs the app
 | Project Type | Strategy |
 |--------------|----------|
 | `mcp-server` | Binary build via `oc start-build --from-dir`, rollout restart, route display |
-| `agent` | Helm chart deploy via `helm upgrade --install` |
-| `workflow` | Helm chart deploy via `helm upgrade --install` |
+| `agent` | Binary build via `oc new-build` + `oc start-build`, then Helm chart deploy |
+| `workflow` | Binary build via `oc new-build` + `oc start-build`, then Helm chart deploy |
 
 ```bash
 # Deploy with auto-detected namespace (defaults to project name)
