@@ -188,17 +188,24 @@ Creates an AI agent project from the [agent-template](https://github.com/fips-ag
 
 **Options:** Same as `create mcp-server` (see shared options table above).
 
-**Additional option:**
+**Additional options:**
 
 | Option | Description |
 |--------|-------------|
 | `--vendored` | Copy fipsagents source into the project instead of using PyPI dependency |
+| `--provider [litellm\|openai\|anthropic]` | LLM provider backend (default: `litellm`). Sets `model.provider` in `agent.yaml` and the matching `pyproject.toml` extra |
 
 **Examples:**
 
 ```bash
-# Create agent project
+# Create agent project (default: litellm provider)
 fips-agents create agent my-research-agent
+
+# Create with native Anthropic provider
+fips-agents create agent my-agent --provider anthropic --local
+
+# Create with direct OpenAI provider (vLLM, LlamaStack)
+fips-agents create agent my-agent --provider openai --local
 
 # Create with GitHub repo in an organization
 fips-agents create agent my-agent --github --org fips-agents
@@ -1035,6 +1042,14 @@ MIT License - see LICENSE file for details
 - **MCP Protocol**: https://modelcontextprotocol.io/
 
 ## Changelog
+
+### Version 0.17.0
+
+- Feature: New `--provider` flag on `create agent` selects the LLM provider backend: `litellm` (default, 100+ providers via one dependency), `openai` (direct AsyncOpenAI for vLLM/LlamaStack), or `anthropic` (direct AsyncAnthropic for native Anthropic features). Sets `model.provider` in `agent.yaml` and adds the matching fipsagents extra to `pyproject.toml`
+- Fix: Scaffolder's initial commit now includes dotfiles (`.gitignore`, `.claude/`, `.containerignore`, `.fips-template.yaml`, `.memoryhub.yaml`). Previously `repo.index.add("*")` used a glob that skipped hidden files (#235)
+- Fix: Vendored `pyproject.toml` dependencies now read from the upstream `UPSTREAM.toml` instead of a hardcoded list that incorrectly declared `litellm` instead of `openai` (#234). Falls back to a corrected hardcoded list when `UPSTREAM.toml` is unavailable
+- Fix: Vendoring now prints a version notice so users can see what version they received (#233)
+- Fix: Agent deploy build pipeline with nil map handling in `--set`
 
 ### Version 0.16.0
 
