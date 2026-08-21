@@ -608,6 +608,78 @@ def customize_go_project(project_path: Path, new_name: str, sentinel: str) -> No
         raise
 
 
+def customize_provider(project_path: Path, provider: str) -> None:
+    """
+    Customize the scaffolded project for the selected LLM provider.
+
+    Updates agent.yaml model defaults and pyproject.toml dependencies to
+    match the chosen provider backend (litellm, openai, or anthropic).
+
+    Args:
+        project_path: Path to the project root directory
+        provider: One of "litellm", "openai", "anthropic"
+    """
+    provider = provider.lower()
+
+    # --- 1. Update agent.yaml via string replacement ---
+    agent_yaml = project_path / "agent.yaml"
+    if agent_yaml.exists():
+        text = agent_yaml.read_text()
+
+        if provider == "litellm":
+            text = text.replace(
+                "provider: ${MODEL_PROVIDER:-openai}",
+                "provider: ${MODEL_PROVIDER:-litellm}",
+            )
+        elif provider == "openai":
+            pass  # openai is already the template default
+        elif provider == "anthropic":
+            text = text.replace(
+                "provider: ${MODEL_PROVIDER:-openai}",
+                "provider: ${MODEL_PROVIDER:-anthropic}",
+            )
+            text = text.replace(
+                "endpoint: ${MODEL_ENDPOINT:-http://llamastack:8321/v1}",
+                'endpoint: "${MODEL_ENDPOINT:-}"',
+            )
+            text = text.replace(
+                "name: ${MODEL_NAME:-meta-llama/Llama-3.3-70B-Instruct}",
+                "name: ${MODEL_NAME:-claude-sonnet-4-20250514}",
+            )
+
+        agent_yaml.write_text(text)
+        console.print(f"[green]✓[/green] Configured agent.yaml for provider '{provider}'")
+
+    # --- 2. Update pyproject.toml dependencies ---
+    pyproject_path = project_path / "pyproject.toml"
+    if pyproject_path.exists():
+        with open(pyproject_path) as f:
+            pyproject = tomlkit.parse(f.read())
+
+        if "project" in pyproject and "dependencies" in pyproject["project"]:
+            deps = list(pyproject["project"]["dependencies"])
+            # Build the new fipsagents dependency spec
+            extras = {"server"}
+            if provider == "litellm":
+                extras.add("litellm")
+            elif provider == "anthropic":
+                extras.add("anthropic")
+            # openai needs no extra -- it's a core dep
+
+            extras_str = ",".join(sorted(extras))
+            new_dep = f"fipsagents[{extras_str}]"
+
+            # Replace any existing fipsagents dependency
+            new_deps = [d for d in deps if "fipsagents" not in d.lower()]
+            new_deps.insert(0, new_dep)
+            pyproject["project"]["dependencies"] = new_deps
+
+        with open(pyproject_path, "w") as f:
+            f.write(tomlkit.dumps(pyproject))
+
+        console.print(f"[green]✓[/green] Updated pyproject.toml for provider '{provider}'")
+
+
 def find_agent_project_root(start: Path | None = None) -> Path | None:
     """Walk up from ``start`` to locate an agent project root.
 
@@ -810,6 +882,13 @@ def vendor_fipsagents_from_clone(
         f"[green]✓[/green] Wrote VENDORED marker (version {version}, commit {commit_short})"
     )
 
+    # Prominently display the vendored version so users can check for staleness
+    console.print()
+    console.print(
+        f"[bold cyan]Vendored fipsagents version: {version}[/bold cyan]\n"
+        f"  Check PyPI for the latest: [dim]pip index versions fipsagents[/dim]"
+    )
+
 
 def rewrite_pyproject_for_vendored(project_path: Path) -> None:
     """
@@ -826,17 +905,42 @@ def rewrite_pyproject_for_vendored(project_path: Path) -> None:
     with open(pyproject_path) as f:
         pyproject = tomlkit.parse(f.read())
 
-    # Replace fipsagents[server] with its individual dependencies
-    vendored_deps = [
-        "litellm>=1.83.0",
-        "fastmcp>=3.0.0",
-        "pydantic>=2.0",
-        "pyyaml",
-        "httpx",
-        "python-frontmatter",
-        "fastapi>=0.110",
-        "uvicorn[standard]>=0.27",
-    ]
+    # Read vendored dependencies from UPSTREAM.toml (the upstream pyproject.toml
+    # copied during vendor_fipsagents_from_clone). This keeps the vendored deps
+    # in sync with whatever fipsagents actually declares.
+    upstream_toml_path = project_path / "src" / "fipsagents" / "UPSTREAM.toml"
+    upstream_deps = None
+    upstream_opt_deps = None
+    if upstream_toml_path.exists():
+        try:
+            with open(upstream_toml_path) as uf:
+                upstream = tomlkit.parse(uf.read())
+            upstream_project = upstream.get("project", {})
+            upstream_deps = list(upstream_project.get("dependencies", []))
+            upstream_opt_deps = dict(upstream_project.get("optional-dependencies", {}))
+        except Exception:
+            pass  # fall through to hardcoded fallback
+
+    # Fallback: corrected hardcoded list (openai, not litellm)
+    if upstream_deps is None:
+        upstream_deps = [
+            "openai>=1.40.0",
+            "fastmcp>=3.0.0",
+            "pydantic>=2.0",
+            "pyyaml",
+            "httpx",
+            "python-frontmatter",
+        ]
+    if upstream_opt_deps is None:
+        upstream_opt_deps = {
+            "memory": ["memoryhub"],
+            "server": ["fastapi>=0.110", "uvicorn[standard]>=0.27", "aiosqlite>=0.20.0"],
+        }
+
+    # Also pull in server deps by default (agents need the HTTP server)
+    vendored_deps = list(upstream_deps)
+    server_deps = list(upstream_opt_deps.get("server", []))
+    vendored_deps.extend(server_deps)
 
     if "project" in pyproject and "dependencies" in pyproject["project"]:
         old_deps = list(pyproject["project"]["dependencies"])
@@ -844,14 +948,18 @@ def rewrite_pyproject_for_vendored(project_path: Path) -> None:
         new_deps.extend(vendored_deps)
         pyproject["project"]["dependencies"] = new_deps
 
-    # Fix optional memory dependency too
+    # Fix optional dependencies that reference fipsagents extras
     if "project" in pyproject:
         opt_deps = pyproject["project"].get("optional-dependencies", {})
-        if "memory" in opt_deps:
-            old_memory = list(opt_deps["memory"])
-            new_memory = [d for d in old_memory if "fipsagents" not in d.lower()]
-            new_memory.append("memoryhub")
-            opt_deps["memory"] = new_memory
+        for group_name in list(opt_deps.keys()):
+            old_group = list(opt_deps[group_name])
+            # Check if any entry references fipsagents
+            if any("fipsagents" in d.lower() for d in old_group):
+                new_group = [d for d in old_group if "fipsagents" not in d.lower()]
+                # Add the corresponding upstream optional deps if available
+                if group_name in upstream_opt_deps:
+                    new_group.extend(upstream_opt_deps[group_name])
+                opt_deps[group_name] = new_group
 
     with open(pyproject_path, "w") as f:
         f.write(tomlkit.dumps(pyproject))
