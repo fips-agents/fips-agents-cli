@@ -120,7 +120,7 @@ def init_repository(project_path: Path, initial_commit: bool = True) -> None:
 
         if initial_commit:
             # Add all files
-            repo.index.add("*")
+            repo.index.add(".")
 
             # Create initial commit
             repo.index.commit("Initial commit from fips-agents-cli")
