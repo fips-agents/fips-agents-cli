@@ -699,9 +699,7 @@ class TestDeployAgentSuccess:
             ),
             patch("fips_agents_cli.commands.deploy.namespace_exists", return_value=True),
             patch("fips_agents_cli.commands.deploy.is_helm_installed", return_value=True),
-            patch(
-                "fips_agents_cli.commands.deploy.oc_new_build", return_value=(True, "ok")
-            ),
+            patch("fips_agents_cli.commands.deploy.oc_new_build", return_value=(True, "ok")),
             patch(
                 "fips_agents_cli.commands.deploy.create_build_context",
                 return_value=(True, "ok", ctx_dir),
