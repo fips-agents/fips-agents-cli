@@ -29,6 +29,7 @@ from fips_agents_cli.tools.project import (
     customize_agent_project,
     customize_agent_team_project,
     customize_go_project,
+    customize_provider,
     customize_sandbox_project,
     customize_workflow_project,
     to_module_name,
@@ -388,6 +389,12 @@ def mcp_server(
     default=False,
     help="Copy fipsagents source into the project instead of using PyPI dependency",
 )
+@click.option(
+    "--provider",
+    type=click.Choice(["litellm", "openai", "anthropic"], case_sensitive=False),
+    default="litellm",
+    help="LLM provider backend (default: litellm).",
+)
 def agent(
     project_name: str,
     target_dir: str | None,
@@ -400,6 +407,7 @@ def agent(
     repo_description: str | None,
     remote_only: bool,
     vendored: bool,
+    provider: str,
 ):
     """
     Create a new AI agent project from template.
@@ -422,6 +430,8 @@ def agent(
         fips-agents create agent my-research-agent --yes
 
         fips-agents create agent my-research-agent --vendored --local
+
+        fips-agents create agent my-research-agent --provider anthropic
     """
     try:
         # Step 1: Validate options
@@ -537,6 +547,7 @@ def agent(
             progress.add_task(description="Customizing project...", total=None)
             try:
                 customize_agent_project(target_path, project_name, github_repo=github_repo)
+                customize_provider(target_path, provider)
                 cleanup_template_files(target_path)
                 if vendored:
                     from fips_agents_cli.tools.project import rewrite_pyproject_for_vendored
